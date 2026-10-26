@@ -1,0 +1,40 @@
+# Commit Quarantine Gateway policy.
+#
+# The gateway evaluates every rule against every finding and applies the
+# strictest matching action, so rule order here does not change the outcome.
+# Actions, strictest first: block > hold > release.
+version: 1
+
+# Verdict when nothing matches.
+default: release
+
+# Block the push if a scanner fails to run, so a crashing scanner cannot
+# become a silent bypass. Set to false only in a lab.
+fail_closed: true
+
+rules:
+  - name: any-verified-secret
+    scanner: secrets
+    min_severity: high
+    action: block
+
+  - name: unverified-secret-needs-review
+    scanner: secrets
+    min_severity: medium
+    action: hold
+
+  - name: critical-dependency-vulnerability
+    scanner: deps
+    min_severity: critical
+    action: block
+
+  # Infrastructure changes get a human look rather than an automatic reject.
+  - name: iac-change-review
+    scanner: iac
+    path_glob: "*.tf"
+    action: hold
+
+  - name: unsigned-commit
+    scanner: signature
+    rule_id: commit-unsigned
+    action: hold
