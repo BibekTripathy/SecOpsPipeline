@@ -1,0 +1,36 @@
+# Commit Quarantine Gateway configuration.
+
+# Address developers push to. Put TLS in front of this in any real
+# deployment: a PAT travels in the Basic auth header.
+listen: 127.0.0.1:8080
+
+# Database, quarantine repos, audit log and SARIF reports all live here.
+data_dir: ./data
+
+policy_file: ./configs/policy.example.yaml
+
+scan:
+  # Concurrent scanner plugins per push.
+  workers: 4
+  timeout: 5m
+  max_push_bytes: 536870912  # 512 MiB
+  # Verification tells a live credential from a rotated one, but it sends
+  # the matched secret to the provider. Off by default, deliberately.
+  verify_secrets: false
+  require_signed_commits: false
+
+upstream:
+  # The gateway's own deploy key. Developers must NOT have write access to
+  # the upstream remote: that is what makes the gateway unbypassable.
+  ssh_key_path: ""
+  known_hosts_path: ""
+
+# Repositories this gateway fronts. Push to
+# https://<listen>/<name>.git and the gateway forwards to url.
+repos:
+  acme/api:
+    url: git@github.com:acme/api.git
+
+log:
+  level: info
+  format: text
