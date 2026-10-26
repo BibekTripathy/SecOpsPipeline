@@ -72,11 +72,11 @@ func (m *Manager) EnsureMirror(ctx context.Context, repo, upstreamURL string) (s
 		if err := os.MkdirAll(path, 0o700); err != nil {
 			return "", fmt.Errorf("create mirror dir: %w", err)
 		}
-		if _, err := gitutil.Run(ctx, path, "init", "--bare", "--quiet"); err != nil {
+		if _, err := gitutil.Run(ctx, gitutil.At(path), "init", "--bare", "--quiet"); err != nil {
 			return "", fmt.Errorf("init mirror: %w", err)
 		}
 		if upstreamURL != "" {
-			if _, err := gitutil.Run(ctx, path, "remote", "add", "origin", upstreamURL); err != nil {
+			if _, err := gitutil.Run(ctx, gitutil.At(path), "remote", "add", "origin", upstreamURL); err != nil {
 				return "", fmt.Errorf("add upstream remote: %w", err)
 			}
 		}
@@ -88,7 +88,7 @@ func (m *Manager) EnsureMirror(ctx context.Context, repo, upstreamURL string) (s
 		// A fetch failure is not fatal: an unreachable upstream must not stop
 		// us from quarantining and scanning the push. It only means the
 		// old..new range may be wider than strictly necessary.
-		_, _ = gitutil.Run(ctx, path, "fetch", "--prune", "origin", "+refs/heads/*:refs/heads/*")
+		_, _ = gitutil.Run(ctx, gitutil.At(path), "fetch", "--prune", "origin", "+refs/heads/*:refs/heads/*")
 	}
 	return path, nil
 }
@@ -108,7 +108,7 @@ func (m *Manager) Begin(ctx context.Context, repo, mirrorPath string) (*Push, er
 	if err := os.MkdirAll(path, 0o700); err != nil {
 		return nil, fmt.Errorf("create quarantine dir: %w", err)
 	}
-	if _, err := gitutil.Run(ctx, path, "init", "--bare", "--quiet"); err != nil {
+	if _, err := gitutil.Run(ctx, gitutil.At(path), "init", "--bare", "--quiet"); err != nil {
 		os.RemoveAll(path)
 		return nil, fmt.Errorf("init quarantine: %w", err)
 	}
@@ -122,7 +122,7 @@ func (m *Manager) Begin(ctx context.Context, repo, mirrorPath string) (*Push, er
 		}
 		// Copy the mirror's refs so git-receive-pack advertises the real
 		// upstream tips and the client sends a minimal packfile.
-		if _, err := gitutil.Run(ctx, path, "fetch", "--quiet", mirrorPath, "+refs/heads/*:refs/heads/*"); err != nil {
+		if _, err := gitutil.Run(ctx, gitutil.At(path), "fetch", "--quiet", mirrorPath, "+refs/heads/*:refs/heads/*"); err != nil {
 			os.RemoveAll(path)
 			return nil, fmt.Errorf("seed quarantine refs: %w", err)
 		}

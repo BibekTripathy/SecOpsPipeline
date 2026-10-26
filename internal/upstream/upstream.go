@@ -32,11 +32,11 @@ func (p *Pusher) Push(ctx context.Context, quarantinePath, upstreamURL, ref, new
 	if env := p.sshCommand(); env != "" {
 		// gitutil.Run does not take env, so configure the transport through
 		// repo-local config instead of the process environment.
-		if _, err := gitutil.Run(ctx, quarantinePath, "config", "core.sshCommand", env); err != nil {
+		if _, err := gitutil.Run(ctx, gitutil.At(quarantinePath), "config", "core.sshCommand", env); err != nil {
 			return fmt.Errorf("configure ssh command: %w", err)
 		}
 	}
-	if _, err := gitutil.Run(ctx, quarantinePath, args...); err != nil {
+	if _, err := gitutil.Run(ctx, gitutil.At(quarantinePath), args...); err != nil {
 		return fmt.Errorf("forward %s to upstream: %w", ref, err)
 	}
 	return nil

@@ -17,6 +17,8 @@ Derived from `Cloud & Security Project Ideas.pdf`, which sets the MVP at
 - [x] PAT auth: scopes, expiry, revocation; SQLite store
 - [x] Terminal output: findings, reasons, next steps
 - [x] Admin CLI: `user`, `token`, `audit`, `policy`
+- [x] Forward every updated ref, not just the tip
+- [x] End-to-end tests: real `git push` against a running gateway
 
 ## MVP remaining
 
@@ -29,11 +31,6 @@ What is left of that:
   - [ ] OSV batch-query client with an on-disk cache keyed by
         (ecosystem, name, version); a push must not pay for a cold lookup
   - [ ] `package-lock.json` and `requirements.txt` parsers
-- [ ] **Forward every updated ref**, not just `refs/heads/main`
-      (`Gateway.forward`)
-- [ ] **End-to-end test**: real `git push` against a running gateway,
-      asserting that a planted secret is rejected and a clean push lands
-      upstream. This is the test that proves the whole premise.
 - [ ] Per-repo policy files (`repos.<name>.policy_file` is parsed but unused)
 
 ## Stretch goals
@@ -76,4 +73,4 @@ open:
 
 1. a README with an architecture diagram — **done**
 2. one measured result — **blocked on the benchmark and red-team corpus**
-3. a short demo GIF — **blocked on the end-to-end push test**
+3. a short demo GIF — **unblocked**; the e2e suite shows the exact flow to record

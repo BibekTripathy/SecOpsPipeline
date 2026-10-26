@@ -52,7 +52,7 @@ func (s *Scanner) Scan(ctx context.Context, t *scanner.Target) ([]finding.Findin
 			return out, err
 		}
 
-		size, err := gitutil.BlobSize(ctx, t.RepoPath, f.Blob)
+		size, err := gitutil.BlobSize(ctx, t.Git, f.Blob)
 		if err != nil {
 			return out, fmt.Errorf("size of %s: %w", f.Path, err)
 		}
@@ -60,7 +60,7 @@ func (s *Scanner) Scan(ctx context.Context, t *scanner.Target) ([]finding.Findin
 			continue
 		}
 
-		content, err := gitutil.ReadBlob(ctx, t.RepoPath, f.Blob)
+		content, err := gitutil.ReadBlob(ctx, t.Git, f.Blob)
 		if err != nil {
 			return out, fmt.Errorf("read %s: %w", f.Path, err)
 		}

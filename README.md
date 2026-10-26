@@ -61,6 +61,9 @@ tested; several scanners and the reviewer UI are stubs. See
 | Hold-for-approval review flow | partial — verdict works, queue is TODO |
 | Reviewer dashboard | not started |
 
+End-to-end tests drive a real `git push` against a running gateway: see
+[`test/e2e`](test/e2e).
+
 ## Quick start
 
 ```sh

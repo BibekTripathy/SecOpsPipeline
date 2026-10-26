@@ -88,7 +88,12 @@ func RunPreReceive(stdin io.Reader, stderr io.Writer) int {
 		return 0
 	}
 
-	resp, err := Ask(socket, Request{PushID: pushID, Updates: updates})
+	resp, err := Ask(socket, Request{
+		PushID:              pushID,
+		Updates:             updates,
+		ObjectDir:           gitObjectDir(),
+		AlternateObjectDirs: os.Getenv(EnvGitAltObjects),
+	})
 	if err != nil {
 		fmt.Fprintf(stderr, "quarantine gateway: %v\n", err)
 		fmt.Fprintln(stderr, "quarantine gateway: push rejected because no verdict could be reached")
@@ -106,4 +111,17 @@ func RunPreReceive(stdin io.Reader, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// gitObjectDir reports where the incoming objects actually are.
+//
+// git sets GIT_QUARANTINE_PATH when receive-pack is using its own object
+// quarantine, and GIT_OBJECT_DIRECTORY when the object store has simply
+// been relocated. The quarantine path wins when both are set, because that
+// is where this push's new objects live.
+func gitObjectDir() string {
+	if q := os.Getenv(EnvGitQuarantine); q != "" {
+		return q
+	}
+	return os.Getenv(EnvGitObjectDir)
 }

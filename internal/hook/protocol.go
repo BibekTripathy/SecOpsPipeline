@@ -20,6 +20,15 @@ const (
 	EnvPushID = "SQG_PUSH_ID"
 )
 
+// Environment variables git sets for the pre-receive hook. They name the
+// temporary object store holding the incoming objects, which git only
+// migrates into the repository once the hook passes.
+const (
+	EnvGitQuarantine = "GIT_QUARANTINE_PATH"
+	EnvGitObjectDir  = "GIT_OBJECT_DIRECTORY"
+	EnvGitAltObjects = "GIT_ALTERNATE_OBJECT_DIRECTORIES"
+)
+
 // RefUpdate is one line of the hook's stdin: "<old> <new> <ref>".
 type RefUpdate struct {
 	OldRev string `json:"old_rev"`
@@ -31,6 +40,13 @@ type RefUpdate struct {
 type Request struct {
 	PushID  string      `json:"push_id"`
 	Updates []RefUpdate `json:"updates"`
+
+	// ObjectDir and AlternateObjectDirs relay git's own object quarantine
+	// to the gateway. The gateway runs as a separate process, so without
+	// these every plumbing command fails with "bad object" on exactly the
+	// commits being pushed.
+	ObjectDir           string `json:"object_dir,omitempty"`
+	AlternateObjectDirs string `json:"alternate_object_dirs,omitempty"`
 }
 
 // Response is the gateway's verdict.

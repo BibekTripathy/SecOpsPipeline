@@ -15,8 +15,9 @@ import (
 type Target struct {
 	// Repo is the logical repository name, e.g. "acme/api".
 	Repo string
-	// RepoPath is the on-disk quarantine bare repo.
-	RepoPath string
+	// Repo is the on-disk quarantine bare repo, including the object
+	// directories needed to read this push's objects.
+	Git gitutil.Repo
 	// Ref being updated, e.g. "refs/heads/main".
 	Ref string
 	// OldRev is the upstream tip before the push (ZeroOID for a new ref).

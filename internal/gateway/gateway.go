@@ -68,6 +68,9 @@ type inflightPush struct {
 	identity auth.Identity
 	decision policy.Decision
 	decided  bool
+	// updates is the ref list the hook reported, so a released push
+	// forwards every ref it actually touched rather than an assumed one.
+	updates []hook.RefUpdate
 }
 
 // New prepares a gateway.
@@ -193,8 +196,14 @@ func (g *Gateway) Decide(ctx context.Context, req hook.Request) hook.Response {
 		reasons  []string
 	)
 
+	git := gitutil.Repo{
+		Path:                state.push.Path,
+		ObjectDir:           req.ObjectDir,
+		AlternateObjectDirs: req.AlternateObjectDirs,
+	}
+
 	for _, u := range req.Updates {
-		target, err := g.describe(ctx, state.push, u)
+		target, err := g.describe(ctx, state.push, git, u)
 		if err != nil {
 			g.Log.Error("describe push", "push", req.PushID, "error", err)
 			return hook.Response{Err: "could not read the pushed commits"}
@@ -219,7 +228,7 @@ func (g *Gateway) Decide(ctx context.Context, req hook.Request) hook.Response {
 	}
 
 	decision := policy.Decision{Verdict: verdict, Reasons: reasons}
-	g.setDecision(req.PushID, decision)
+	g.setDecision(req.PushID, decision, req.Updates)
 
 	if err := g.writeReport(req.PushID, state.push.Repo, all, decision); err != nil {
 		g.Log.Error("write sarif report", "push", req.PushID, "error", err)
@@ -232,23 +241,27 @@ func (g *Gateway) Decide(ctx context.Context, req hook.Request) hook.Response {
 }
 
 // describe computes what a scanner is allowed to see about one ref update.
-func (g *Gateway) describe(ctx context.Context, push *quarantine.Push, u hook.RefUpdate) (*scanner.Target, error) {
-	commits, err := gitutil.NewCommits(ctx, push.Path, u.OldRev, u.NewRev)
+//
+// git is passed through from the hook request because the incoming objects
+// are still in git's own receive-pack quarantine at this point; see
+// gitutil.Repo.
+func (g *Gateway) describe(ctx context.Context, push *quarantine.Push, git gitutil.Repo, u hook.RefUpdate) (*scanner.Target, error) {
+	commits, err := gitutil.NewCommits(ctx, git, u.OldRev, u.NewRev)
 	if err != nil {
 		return nil, err
 	}
-	files, err := gitutil.ChangedFiles(ctx, push.Path, u.OldRev, u.NewRev)
+	files, err := gitutil.ChangedFiles(ctx, git, u.OldRev, u.NewRev)
 	if err != nil {
 		return nil, err
 	}
 	return &scanner.Target{
-		Repo:     push.Repo,
-		RepoPath: push.Path,
-		Ref:      u.Ref,
-		OldRev:   u.OldRev,
-		NewRev:   u.NewRev,
-		Commits:  commits,
-		Files:    files,
+		Repo:    push.Repo,
+		Git:     git,
+		Ref:     u.Ref,
+		OldRev:  u.OldRev,
+		NewRev:  u.NewRev,
+		Commits: commits,
+		Files:   files,
 	}, nil
 }
 
@@ -293,16 +306,37 @@ func (g *Gateway) writeReport(pushID, repo string, fs []finding.Finding, d polic
 	}))
 }
 
+// forward sends every ref the push updated to the real remote.
+//
+// A partial failure is reported rather than retried: the developer has
+// already been told the push succeeded, so the honest outcome is a loud
+// error naming exactly which refs did not land.
 func (g *Gateway) forward(ctx context.Context, push *quarantine.Push, repo string, state *inflightPush) error {
 	url := g.upstreamURL(repo)
 	if url == "" {
 		g.Log.Warn("no upstream configured; push released but not forwarded", "repo", repo)
 		return nil
 	}
-	// TODO(forward): forward every ref the push updated, not just the tip.
-	// The ref list is in the hook request and needs threading into state.
-	_ = state
-	return g.Pusher.Push(ctx, push.Path, url, "refs/heads/main", "refs/heads/main")
+
+	var failed []string
+	for _, u := range state.updates {
+		if u.NewRev == gitutil.ZeroOID {
+			// A deletion. The gateway does not propagate ref deletions:
+			// there is nothing to scan, and deleting a branch upstream is
+			// not something a scanning proxy should do on its own.
+			g.Log.Warn("ref deletion not forwarded", "repo", repo, "ref", u.Ref)
+			continue
+		}
+		if err := g.Pusher.Push(ctx, push.Path, url, u.Ref, u.NewRev); err != nil {
+			g.Log.Error("forward ref", "repo", repo, "ref", u.Ref, "error", err)
+			failed = append(failed, u.Ref)
+		}
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("forwarded %d of %d refs; failed: %v",
+			len(state.updates)-len(failed), len(state.updates), failed)
+	}
+	return nil
 }
 
 func (g *Gateway) upstreamURL(repo string) string {
@@ -335,12 +369,13 @@ func (g *Gateway) lookup(pushID string) *inflightPush {
 	return g.inflight[pushID]
 }
 
-func (g *Gateway) setDecision(pushID string, d policy.Decision) {
+func (g *Gateway) setDecision(pushID string, d policy.Decision, updates []hook.RefUpdate) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if s, ok := g.inflight[pushID]; ok {
 		s.decision = d
 		s.decided = true
+		s.updates = updates
 	}
 }
 
