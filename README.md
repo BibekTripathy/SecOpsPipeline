@@ -21,7 +21,7 @@ git push gateway main
       ▼
  pre-receive hook ──────────▶  scanners (parallel)
                                  secrets    entropy + patterns + verification
-                                 deps       OSV
+                                 deps       OSV (Go, npm, PyPI)
                                  signature  commit signing
                                  sast       planned
                                  iac        planned
@@ -56,7 +56,7 @@ tested; several scanners and the reviewer UI are stubs. See
 | SARIF reports | working |
 | PAT auth + SQLite store | working |
 | Credential verification | interface only |
-| Dependency scanner (OSV) | interface only |
+| Dependency scanner (OSV, Go/npm/PyPI) | working |
 | SAST / IaC scanners | not started |
 | Hold-for-approval review flow | partial — verdict works, queue is TODO |
 | Reviewer dashboard | not started |

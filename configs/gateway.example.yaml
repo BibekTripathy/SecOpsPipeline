@@ -19,6 +19,14 @@ scan:
   verify_secrets: false
   require_signed_commits: false
 
+  dependencies:
+    # Off by default: this makes a network call to the OSV API on any
+    # push that changes a manifest.
+    enabled: false
+    # Point at a mirror for an air-gapped deployment.
+    endpoint: ""
+    timeout: 15s
+
 upstream:
   # The gateway's own deploy key. Developers must NOT have write access to
   # the upstream remote: that is what makes the gateway unbypassable.

@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"strconv"
 	"time"
 
 	"github.com/BibekTripathy/SecOpsPipeline/internal/finding"
@@ -26,6 +27,9 @@ type Package struct {
 	// Manifest is the file it was declared in, for the finding's location.
 	Manifest string
 	Line     int
+	// Indirect marks a transitive dependency. Policy may reasonably treat
+	// those differently: you cannot upgrade one directly.
+	Indirect bool
 }
 
 // Vulnerability is one OSV record affecting a package.
@@ -33,8 +37,14 @@ type Vulnerability struct {
 	ID       string
 	Summary  string
 	Severity finding.Severity
-	FixedIn  string
-	Aliases  []string
+	// FixedIn is the version that resolves it, for the package this
+	// record was attached to. Empty when the advisory names no fix.
+	FixedIn string
+	Aliases []string
+
+	// fixed maps package name to fixed version, so one cached record can
+	// serve several packages it affects.
+	fixed map[string]string
 }
 
 // Client queries a vulnerability database.
@@ -56,11 +66,26 @@ type Scanner struct {
 	// Timeout bounds the database query so an unreachable OSV does not hold
 	// a push open until the hook's own timeout.
 	Timeout time.Duration
+	// MaxManifestBytes skips implausibly large manifests. A lockfile can
+	// legitimately be megabytes, so this is generous.
+	MaxManifestBytes int64
 }
 
 // New returns a dependency scanner.
 func New(c Client, parsers ...Parser) *Scanner {
-	return &Scanner{Client: c, Parsers: parsers, Timeout: 30 * time.Second}
+	return &Scanner{
+		Client:           c,
+		Parsers:          parsers,
+		Timeout:          30 * time.Second,
+		MaxManifestBytes: 16 << 20,
+	}
+}
+
+// NewDefault returns the scanner a default deployment runs: OSV with a
+// process-lifetime cache, and every parser that exists.
+func NewDefault() *Scanner {
+	return New(NewOSVClient(NewMemoryCache()),
+		GoModParser{}, RequirementsParser{}, NpmLockParser{})
 }
 
 func (s *Scanner) Name() string { return "deps" }
@@ -110,6 +135,7 @@ func (s *Scanner) Scan(ctx context.Context, t *scanner.Target) ([]finding.Findin
 					"version":   pkg.Version,
 					"summary":   v.Summary,
 					"fixed_in":  v.FixedIn,
+					"indirect":  strconv.FormatBool(pkg.Indirect),
 				},
 			})
 		}
@@ -119,18 +145,48 @@ func (s *Scanner) Scan(ctx context.Context, t *scanner.Target) ([]finding.Findin
 
 // collect parses the manifests this push touched.
 //
-// TODO(deps): read blob content once the parsers exist. The shape is
-// settled; what is missing is the per-ecosystem parsing.
-func (s *Scanner) collect(_ context.Context, t *scanner.Target) ([]Package, error) {
+// Only changed manifests are read, so the cost of a scan tracks the size
+// of the change rather than the size of the project: a push that does not
+// touch dependencies costs one map lookup per file and no network call.
+func (s *Scanner) collect(ctx context.Context, t *scanner.Target) ([]Package, error) {
 	var pkgs []Package
+	seen := map[string]bool{}
+
 	for _, f := range t.Files {
 		if f.Blob == "" {
 			continue
 		}
-		if s.parserFor(path.Base(f.Path)) == nil {
+		parser := s.parserFor(path.Base(f.Path))
+		if parser == nil {
 			continue
 		}
-		// TODO(deps): gitutil.ReadBlob + parser.Parse.
+
+		content, err := t.ReadFile(ctx, f, s.MaxManifestBytes)
+		if err != nil {
+			return nil, err
+		}
+		if content == nil {
+			continue // deleted, or implausibly large for a manifest
+		}
+
+		parsed, err := parser.Parse(f.Path, content)
+		if err != nil {
+			// A manifest the push is in the middle of editing may not
+			// parse. That is the developer's problem, not a reason to
+			// fail the whole scan and block on an unrelated rule.
+			continue
+		}
+
+		for _, p := range parsed {
+			// The same dependency can appear in several manifests of a
+			// monorepo; query the database for it once.
+			key := p.Ecosystem + "\x00" + p.Name + "\x00" + p.Version
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			pkgs = append(pkgs, p)
+		}
 	}
 	return pkgs, nil
 }
@@ -146,9 +202,6 @@ func (s *Scanner) parserFor(base string) Parser {
 	return nil
 }
 
-// TODO(deps): implement, in this order:
-//   1. parser for go.mod       -- the gateway's own ecosystem, easiest to test
-//   2. OSV client over the batch query API, with an on-disk response cache
-//      keyed by (ecosystem, name, version); vulnerability data changes
-//      slowly and a push must not pay for a cold lookup every time
-//   3. parsers for package-lock.json and requirements.txt
+// TODO(deps): an on-disk cache that survives a restart, so a cold gateway
+// does not pay for detail fetches it has already made. MemoryCache is the
+// interim.

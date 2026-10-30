@@ -24,24 +24,26 @@ Derived from `Cloud & Security Project Ideas.pdf`, which sets the MVP at
 - [x] Scan-time benchmark vs push size (`make bench`), plus the two
       optimisations it paid for: a batched `git cat-file` reader and a
       literal prefilter ahead of the regex layer (18-22x)
+- [x] Dependency scanner: OSV batch client with an advisory cache, and
+      parsers for `go.mod`, `requirements.txt` and `package-lock.json`
 
 ## MVP remaining
 
 The doc's MVP line is "HTTP smart-git proxy, quarantine repo, secrets +
 dependency scanners, a YAML policy file, release/block, terminal output".
-What is left of that:
+All of it is now in place except per-repo policy:
 
-- [ ] **Dependency scanner**, in this order:
-  - [ ] `go.mod` parser — our own ecosystem, easiest to test against
-  - [ ] OSV batch-query client with an on-disk cache keyed by
-        (ecosystem, name, version); a push must not pay for a cold lookup
-  - [ ] `package-lock.json` and `requirements.txt` parsers
 - [ ] Per-repo policy files (`repos.<name>.policy_file` is parsed but unused)
 
 ## Stretch goals
 
 From the doc, roughly in the order they pay off:
 
+- [ ] **OSV response cache on disk**, so a restarted gateway does not
+      re-fetch advisories it already has. `MemoryCache` is the interim.
+- [ ] **CVSS v3 base score** computed from the vector, so advisories that
+      carry only a CVSS vector get a real severity instead of the
+      documented Medium fallback.
 - [ ] **Credential verification**: per-provider read-only checks behind the
       existing `secrets.Verifier` interface (AWS STS, GitHub `/user`, Slack
       `auth.test`, Stripe `/v1/account`). Needs a shared rate limiter and an

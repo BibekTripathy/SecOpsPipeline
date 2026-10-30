@@ -16,6 +16,7 @@ import (
 	"github.com/BibekTripathy/SecOpsPipeline/internal/policy"
 	"github.com/BibekTripathy/SecOpsPipeline/internal/quarantine"
 	"github.com/BibekTripathy/SecOpsPipeline/internal/scanner"
+	"github.com/BibekTripathy/SecOpsPipeline/internal/scanner/deps"
 	"github.com/BibekTripathy/SecOpsPipeline/internal/scanner/secrets"
 	"github.com/BibekTripathy/SecOpsPipeline/internal/scanner/signature"
 	"github.com/BibekTripathy/SecOpsPipeline/internal/store"
@@ -90,10 +91,18 @@ func runServe(args []string) error {
 		log.Warn("verify_secrets is set but no verifiers are implemented yet")
 	}
 
+	scanners := scanner.NewRegistry(
+		secrets.New(verifier),
+		signature.New(cfg.Scan.RequireSignedCommits),
+	)
+	if cfg.Scan.Dependencies.Enabled {
+		scanners.Register(newDepsScanner(cfg))
+	}
+
 	g := gateway.New(&gateway.Gateway{
 		Config:     cfg,
 		Policy:     pol,
-		Scanners:   scanner.NewRegistry(secrets.New(verifier), signature.New(cfg.Scan.RequireSignedCommits)),
+		Scanners:   scanners,
 		Quarantine: qm,
 		Pusher:     pusher,
 		Audit:      auditLog,
@@ -144,4 +153,21 @@ func runServe(args []string) error {
 	}
 	log.Info("gateway stopped")
 	return nil
+}
+
+// newDepsScanner builds the dependency scanner from configuration.
+//
+// The cache lives for the life of the process, so a repository's
+// dependencies are looked up once rather than on every push.
+func newDepsScanner(cfg *config.Config) *deps.Scanner {
+	client := deps.NewOSVClient(deps.NewMemoryCache())
+	if e := cfg.Scan.Dependencies.Endpoint; e != "" {
+		client.Endpoint = e
+	}
+
+	s := deps.New(client, deps.GoModParser{}, deps.RequirementsParser{}, deps.NpmLockParser{})
+	if t := cfg.Scan.Dependencies.Timeout; t > 0 {
+		s.Timeout = t
+	}
+	return s
 }

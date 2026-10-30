@@ -40,6 +40,22 @@ type ScanConfig struct {
 	Verify bool `yaml:"verify_secrets"`
 	// RequireSignedCommits reports every unsigned commit.
 	RequireSignedCommits bool `yaml:"require_signed_commits"`
+
+	// Dependencies enables the OSV-backed dependency scanner. It makes a
+	// network call on any push that changes a manifest, so it is opt-in.
+	Dependencies DepsConfig `yaml:"dependencies"`
+}
+
+// DepsConfig controls the dependency scanner.
+type DepsConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// Endpoint overrides the OSV API, for a mirror or an air-gapped
+	// deployment. Empty uses the public API.
+	Endpoint string `yaml:"endpoint"`
+	// Timeout bounds the database query. It sits in the push path, so a
+	// developer waiting on an unreachable database is worse than a failed
+	// scan that fail_closed can act on.
+	Timeout time.Duration `yaml:"timeout"`
 }
 
 // UpstreamConfig holds the credentials the gateway forwards with.
@@ -111,6 +127,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Scan.Timeout < 0 {
 		return fmt.Errorf("scan.timeout must not be negative")
+	}
+	if c.Scan.Dependencies.Timeout < 0 {
+		return fmt.Errorf("scan.dependencies.timeout must not be negative")
 	}
 	for name, repo := range c.Repos {
 		if repo.URL == "" {

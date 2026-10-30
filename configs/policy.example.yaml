@@ -28,6 +28,11 @@ rules:
     min_severity: critical
     action: block
 
+  - name: high-dependency-vulnerability
+    scanner: deps
+    min_severity: high
+    action: hold
+
   # Infrastructure changes get a human look rather than an automatic reject.
   - name: iac-change-review
     scanner: iac
