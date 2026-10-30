@@ -11,7 +11,7 @@ import (
 func scanLine(t *testing.T, line string) []finding.Finding {
 	t.Helper()
 	s := New(nil)
-	return s.scanContent(context.Background(), "app.go", []byte(line))
+	return s.ScanContent(context.Background(), "app.go", []byte(line))
 }
 
 func TestDetectsKnownCredentialShapes(t *testing.T) {
@@ -69,7 +69,7 @@ func TestRedactShortSecretIsFullyMasked(t *testing.T) {
 func TestLineNumbersAreReported(t *testing.T) {
 	content := "package main\n\nvar key = \"AKIAIOSFODNN7EXAMPLE\"\n"
 	s := New(nil)
-	found := s.scanContent(context.Background(), "app.go", []byte(content))
+	found := s.ScanContent(context.Background(), "app.go", []byte(content))
 	if len(found) == 0 {
 		t.Fatal("expected a finding")
 	}
@@ -93,11 +93,11 @@ func TestEntropy(t *testing.T) {
 func TestSkipsGeneratedFiles(t *testing.T) {
 	s := New(nil)
 	for _, p := range []string{"bundle.min.js", "go.sum", "vendor/app.min.js"} {
-		if !s.skip(p) {
+		if !s.SkipPath(p) {
 			t.Errorf("%s should be skipped", p)
 		}
 	}
-	if s.skip("internal/auth/token.go") {
+	if s.SkipPath("internal/auth/token.go") {
 		t.Error("source files must not be skipped")
 	}
 }
@@ -109,8 +109,8 @@ func (f fakeVerifier) Verify(context.Context, string, string) Verdict { return f
 func TestVerificationRaisesAndLowersSeverity(t *testing.T) {
 	line := `key := "AKIAIOSFODNN7EXAMPLE"`
 
-	live := New(fakeVerifier{Live}).scanContent(context.Background(), "a.go", []byte(line))
-	dead := New(fakeVerifier{Dead}).scanContent(context.Background(), "a.go", []byte(line))
+	live := New(fakeVerifier{Live}).ScanContent(context.Background(), "a.go", []byte(line))
+	dead := New(fakeVerifier{Dead}).ScanContent(context.Background(), "a.go", []byte(line))
 
 	if sev, _ := finding.Max(live); sev != finding.SeverityCritical {
 		t.Errorf("live credential severity = %s, want critical", sev)

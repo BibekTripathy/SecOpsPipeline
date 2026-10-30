@@ -19,6 +19,8 @@ Derived from `Cloud & Security Project Ideas.pdf`, which sets the MVP at
 - [x] Admin CLI: `user`, `token`, `audit`, `policy`
 - [x] Forward every updated ref, not just the tip
 - [x] End-to-end tests: real `git push` against a running gateway
+- [x] Red-team corpus: 56 planted secrets, 27 look-alikes, published
+      detection rate and false positive count (`make redteam`)
 
 ## MVP remaining
 
@@ -37,10 +39,6 @@ What is left of that:
 
 From the doc, roughly in the order they pay off:
 
-- [ ] **Red-team corpus**: 50 planted secrets across languages and encodings,
-      with a published detection rate and false-positive count. This is the
-      number that makes the secrets scanner credible, and it should drive the
-      entropy thresholds rather than the other way round.
 - [ ] **Benchmark**: scan time vs push size, with a chart. The honest question
       about any push-path gateway is what it costs, so answer it.
 - [ ] **Credential verification**: per-provider read-only checks behind the
@@ -72,5 +70,15 @@ The doc is explicit about what reviewers look at, and all three are still
 open:
 
 1. a README with an architecture diagram — **done**
-2. one measured result — **blocked on the benchmark and red-team corpus**
+2. one measured result — **partly done**: 100% detection over 56 planted
+   secrets with 0 false positives; the scan-time benchmark is still open
 3. a short demo GIF — **unblocked**; the e2e suite shows the exact flow to record
+
+## Corpus work that remains
+
+The detection rate is 100% because every case was written against a rule
+that exists. The valuable next step is the opposite: add cases for shapes
+the scanner **misses**, and let the rate fall. Candidates are Azure
+connection strings, GCP service-account JSON, npm and PyPI publish tokens,
+HashiCorp Vault tokens, Twilio and SendGrid keys, and base64- or
+hex-wrapped credentials that defeat the pattern layer.

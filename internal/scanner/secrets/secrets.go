@@ -45,7 +45,7 @@ func (s *Scanner) Scan(ctx context.Context, t *scanner.Target) ([]finding.Findin
 	var out []finding.Finding
 
 	for _, f := range t.Files {
-		if f.Blob == "" || s.skip(f.Path) {
+		if f.Blob == "" || s.SkipPath(f.Path) {
 			continue
 		}
 		if err := ctx.Err(); err != nil {
@@ -67,12 +67,20 @@ func (s *Scanner) Scan(ctx context.Context, t *scanner.Target) ([]finding.Findin
 		if isBinary(content) {
 			continue
 		}
-		out = append(out, s.scanContent(ctx, f.Path, content)...)
+		out = append(out, s.ScanContent(ctx, f.Path, content)...)
 	}
 	return out, nil
 }
 
-func (s *Scanner) scanContent(ctx context.Context, filePath string, content []byte) []finding.Finding {
+// ScanContent applies the rule set to one file's contents.
+//
+// It is exported so the red-team corpus can measure detection directly,
+// without standing up a git repository for each of its cases.
+func (s *Scanner) ScanContent(ctx context.Context, filePath string, content []byte) []finding.Finding {
+	if isBinary(content) {
+		return nil
+	}
+
 	var out []finding.Finding
 
 	sc := bufio.NewScanner(bytes.NewReader(content))
@@ -123,7 +131,10 @@ func (s *Scanner) scanContent(ctx context.Context, filePath string, content []by
 	return out
 }
 
-func (s *Scanner) skip(p string) bool {
+// SkipPath reports whether a path is excluded from scanning. Generated
+// bundles and lockfiles are the main source of both false positives and
+// scan time.
+func (s *Scanner) SkipPath(p string) bool {
 	base := path.Base(p)
 	for _, pattern := range s.SkipPaths {
 		if ok, _ := path.Match(pattern, base); ok {

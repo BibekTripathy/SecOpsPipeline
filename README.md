@@ -64,6 +64,25 @@ tested; several scanners and the reviewer UI are stubs. See
 End-to-end tests drive a real `git push` against a running gateway: see
 [`test/e2e`](test/e2e).
 
+## Measured detection
+
+The secrets scanner is measured against a planted-secret corpus
+([`test/redteam`](test/redteam)), regenerated with `make redteam`:
+
+| Metric | Value |
+|---|---|
+| Planted secrets | 56 |
+| **Detection rate** | **100%** |
+| Look-alike files | 27 |
+| **False positives** | **0** |
+
+Every case was written against a rule that already exists, so the rate
+means the scanner has not regressed, not that nothing escapes it. The
+corpus still earns its keep: it found two real gaps in the generic
+assignment rule, and the false positive count is the number that decides
+whether developers trust the tool or route around it. Full report:
+[`docs/detection-report.md`](docs/detection-report.md).
+
 ## Quick start
 
 ```sh
@@ -103,9 +122,10 @@ Two files, both documented inline:
 ## Development
 
 ```sh
-make test    # unit tests
-make race    # the scanner pool and hook server are concurrent; run this
-make cover   # coverage summary
+make test     # unit tests, e2e and the detection corpus
+make race     # the scanner pool and hook server are concurrent; run this
+make cover    # coverage summary
+make redteam  # regenerate the detection report
 ```
 
 ## Security notes

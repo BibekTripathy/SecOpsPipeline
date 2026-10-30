@@ -85,8 +85,13 @@ var DefaultRules = []Rule{
 		Pattern:     regexp.MustCompile(`\b(eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})\b`),
 	},
 	{
+		// The three awkward parts, each found by a corpus case:
+		//   [a-z0-9_.-]*  a suffix after the keyword, as in SECRET_KEY
+		//   ["']?         the closing quote of a JSON key, as in "api_key":
+		//   {12,}         a length floor, so "changeme" and "none" are
+		//                 placeholders rather than findings
 		ID:          "generic-assigned-secret",
 		Description: "Credential-looking value assigned to a secret-named variable",
-		Pattern:     regexp.MustCompile(`(?i)(?:password|passwd|secret|token|api[_.-]?key|auth)\s*[:=]\s*["']([^"'\s]{12,})["']`),
+		Pattern:     regexp.MustCompile(`(?i)(?:password|passwd|pwd|secret|token|api[_.-]?key|auth|credential)[a-z0-9_.-]*["']?\s*[:=]\s*["']([^"'\s]{12,})["']`),
 	},
 }

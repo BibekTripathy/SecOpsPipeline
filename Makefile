@@ -3,7 +3,7 @@ PKG     := github.com/BibekTripathy/SecOpsPipeline
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -X $(PKG)/internal/gateway.Version=$(VERSION)
 
-.PHONY: all build test vet fmt lint cover clean run bench
+.PHONY: all build test vet fmt lint cover clean run bench race redteam
 
 all: fmt vet test build
 
@@ -36,3 +36,9 @@ run: build
 
 clean:
 	rm -rf bin coverage.out data
+
+# Measure the secrets scanner against the planted-secret corpus and write
+# the detection report that README cites.
+redteam:
+	REDTEAM_REPORT=$(CURDIR)/docs/detection-report.md go test ./test/redteam -run TestReportFile -count=1 -v
+	go test ./test/redteam -count=1 -v
