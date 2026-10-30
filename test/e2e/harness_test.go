@@ -46,6 +46,9 @@ type harness struct {
 	token    string
 	upstream string // path to the bare "real remote"
 	work     string // developer working copy
+
+	db     *store.DB
+	userID string
 }
 
 func newHarness(t *testing.T, pol *policy.Policy) *harness {
@@ -110,6 +113,8 @@ func (h *harness) start(policies *policy.Set) {
 		t.Fatalf("create token: %v", err)
 	}
 	h.token = secret
+	h.db = db
+	h.userID = u.ID
 
 	qm, err := quarantine.New(h.cfg.QuarantineDir())
 	if err != nil {
@@ -128,6 +133,7 @@ func (h *harness) start(policies *policy.Set) {
 		Quarantine: qm,
 		Pusher:     &upstream.Pusher{},
 		Audit:      auditLog,
+		Held:       db,
 		Log:        testLogger(t),
 		BinaryPath: buildGatewayBinary(t),
 	})
@@ -242,4 +248,31 @@ func (h *harness) amend(name, content, message string) {
 // It sets up history that already exists before the push under test.
 func (h *harness) seedUpstream(branch string) {
 	run(h.t, h.work, "git", "push", "--quiet", h.upstream, branch)
+}
+
+// pendingReviews lists pushes awaiting a decision.
+func (h *harness) pendingReviews(t *testing.T) []store.HeldPush {
+	t.Helper()
+	held, err := h.db.ListHeldPushes(context.Background(), store.HeldPending)
+	if err != nil {
+		t.Fatalf("ListHeldPushes: %v", err)
+	}
+	return held
+}
+
+// reviewer builds a Reviewer against this harness, as the CLI would.
+func (h *harness) reviewer(t *testing.T) *gateway.Reviewer {
+	t.Helper()
+	auditLog, err := audit.Open(h.cfg.AuditLogPath())
+	if err != nil {
+		t.Fatalf("open audit log: %v", err)
+	}
+	t.Cleanup(func() { auditLog.Close() })
+
+	return &gateway.Reviewer{
+		Config: h.cfg,
+		DB:     h.db,
+		Audit:  auditLog,
+		Pusher: &upstream.Pusher{},
+	}
 }

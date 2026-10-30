@@ -26,7 +26,7 @@ import (
 
 func runServe(args []string) error {
 	fs := flagSet("serve")
-	configPath := fs.String("config", "configs/gateway.example.yaml", "configuration file")
+	configPath := fs.String("config", defaultConfigPath, "configuration file")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -119,6 +119,7 @@ func runServe(args []string) error {
 		Quarantine: qm,
 		Pusher:     pusher,
 		Audit:      auditLog,
+		Held:       db,
 		Log:        log,
 		BinaryPath: binary,
 	})

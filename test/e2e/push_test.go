@@ -1,8 +1,12 @@
 package e2e
 
 import (
+	"context"
+	"os"
 	"strings"
 	"testing"
+
+	"github.com/BibekTripathy/SecOpsPipeline/internal/audit"
 
 	"github.com/BibekTripathy/SecOpsPipeline/internal/finding"
 	"github.com/BibekTripathy/SecOpsPipeline/internal/policy"
@@ -233,5 +237,128 @@ func TestPerRepoPolicyOverridesTheGlobalOne(t *testing.T) {
 	}
 	if v := h.auditVerdicts(); len(v) != 1 || v[0] != "block" {
 		t.Errorf("audit verdicts = %v, want [block]", v)
+	}
+}
+
+// holdSecretsPolicy parks any secret for review rather than rejecting it.
+func holdSecretsPolicy() *policy.Policy {
+	return &policy.Policy{
+		Version: 1, Default: policy.Release, FailClosed: true,
+		Rules: []policy.Rule{{Name: "review-secrets", Scanner: "secrets", Action: policy.Hold}},
+	}
+}
+
+// TestHeldPushIsParkedNotForwarded: a hold must reject the push at the
+// git level -- the developer should not believe it succeeded -- while
+// keeping the objects for a reviewer.
+func TestHeldPushIsParkedNotForwarded(t *testing.T) {
+	h := newHarness(t, holdSecretsPolicy())
+	h.commit("config.go", "package main\n\nconst key = \"AKIAIOSFODNN7EXAMPLE\"\n", "add config")
+
+	out, err := h.push("main")
+	if err == nil {
+		t.Fatalf("a held push must not report success to the developer:\n%s", out)
+	}
+	if !strings.Contains(out, "HELD") {
+		t.Errorf("output should say the push is held, not blocked:\n%s", out)
+	}
+	if h.upstreamRev("refs/heads/main") != "" {
+		t.Error("a held push reached upstream")
+	}
+
+	held := h.pendingReviews(t)
+	if len(held) != 1 {
+		t.Fatalf("got %d held pushes, want 1", len(held))
+	}
+	if len(held[0].Findings) == 0 {
+		t.Error("the held push recorded no findings for the reviewer to see")
+	}
+	if _, err := os.Stat(held[0].QuarantinePath); err != nil {
+		t.Errorf("quarantine was removed, so the scanned objects are gone: %v", err)
+	}
+}
+
+// TestApprovingHeldPushForwardsTheScannedObjects is the point of the
+// hold flow: approval forwards exactly what was scanned.
+func TestApprovingHeldPushForwardsTheScannedObjects(t *testing.T) {
+	h := newHarness(t, holdSecretsPolicy())
+	h.commit("config.go", "package main\n\nconst key = \"AKIAIOSFODNN7EXAMPLE\"\n", "add config")
+	h.push("main")
+
+	held := h.pendingReviews(t)
+	if len(held) != 1 {
+		t.Fatalf("got %d held pushes, want 1", len(held))
+	}
+
+	reviewer := h.reviewer(t)
+	if err := reviewer.Approve(context.Background(), held[0].ID, h.userID, "accepted risk"); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+
+	if got, want := h.upstreamRev("refs/heads/main"), h.localRev("HEAD"); got != want {
+		t.Errorf("upstream main = %q, want %q after approval", got, want)
+	}
+	if n := len(h.pendingReviews(t)); n != 0 {
+		t.Errorf("%d pushes still pending after approval", n)
+	}
+}
+
+// TestRejectingHeldPushForwardsNothing is the other branch.
+func TestRejectingHeldPushForwardsNothing(t *testing.T) {
+	h := newHarness(t, holdSecretsPolicy())
+	h.commit("config.go", "package main\n\nconst key = \"AKIAIOSFODNN7EXAMPLE\"\n", "add config")
+	h.push("main")
+
+	held := h.pendingReviews(t)
+	reviewer := h.reviewer(t)
+	if err := reviewer.Reject(context.Background(), held[0].ID, h.userID, "rotate it"); err != nil {
+		t.Fatalf("Reject: %v", err)
+	}
+
+	if h.upstreamRev("refs/heads/main") != "" {
+		t.Error("a rejected push reached upstream")
+	}
+	if _, err := os.Stat(held[0].QuarantinePath); !os.IsNotExist(err) {
+		t.Error("the quarantine should be reclaimed once the push is resolved")
+	}
+}
+
+// TestHeldPushCannotBeApprovedTwice guards against two reviewers both
+// believing they decided it.
+func TestHeldPushCannotBeApprovedTwice(t *testing.T) {
+	h := newHarness(t, holdSecretsPolicy())
+	h.commit("config.go", "package main\n\nconst key = \"AKIAIOSFODNN7EXAMPLE\"\n", "add config")
+	h.push("main")
+
+	held := h.pendingReviews(t)
+	reviewer := h.reviewer(t)
+	ctx := context.Background()
+
+	if err := reviewer.Approve(ctx, held[0].ID, h.userID, "first"); err != nil {
+		t.Fatalf("first approve: %v", err)
+	}
+	if err := reviewer.Approve(ctx, held[0].ID, h.userID, "second"); err == nil {
+		t.Error("the second approval should have been refused")
+	}
+}
+
+// TestReviewDecisionIsAudited: the trail must show who released a held
+// push, not merely that it was held.
+func TestReviewDecisionIsAudited(t *testing.T) {
+	h := newHarness(t, holdSecretsPolicy())
+	h.commit("config.go", "package main\n\nconst key = \"AKIAIOSFODNN7EXAMPLE\"\n", "add config")
+	h.push("main")
+
+	held := h.pendingReviews(t)
+	if err := h.reviewer(t).Approve(context.Background(), held[0].ID, h.userID, "accepted"); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+
+	verdicts := h.auditVerdicts()
+	if len(verdicts) != 2 || verdicts[0] != "hold" || verdicts[1] != "approved" {
+		t.Errorf("audit verdicts = %v, want [hold approved]", verdicts)
+	}
+	if n, err := audit.Verify(h.cfg.AuditLogPath()); err != nil || n != 2 {
+		t.Errorf("audit chain broken after a review: (%d, %v)", n, err)
 	}
 }

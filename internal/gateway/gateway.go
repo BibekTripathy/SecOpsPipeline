@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,11 +39,18 @@ import (
 	"github.com/BibekTripathy/SecOpsPipeline/internal/quarantine"
 	"github.com/BibekTripathy/SecOpsPipeline/internal/sarif"
 	"github.com/BibekTripathy/SecOpsPipeline/internal/scanner"
+	"github.com/BibekTripathy/SecOpsPipeline/internal/store"
 	"github.com/BibekTripathy/SecOpsPipeline/internal/upstream"
 )
 
 // Version is stamped into SARIF reports. Set at build time via -ldflags.
 var Version = "dev"
+
+// HeldStore persists pushes awaiting review. It is an interface so the
+// gateway does not depend on the whole store package.
+type HeldStore interface {
+	CreateHeldPush(ctx context.Context, h store.HeldPush) error
+}
 
 // Gateway wires the pieces together.
 type Gateway struct {
@@ -54,6 +62,9 @@ type Gateway struct {
 	Pusher     *upstream.Pusher
 	Audit      *audit.Log
 	Log        *slog.Logger
+	// Held records pushes parked by a hold verdict. Nil disables the
+	// hold flow, and a hold then behaves as a block.
+	Held HeldStore
 	// BinaryPath is this executable, installed as the pre-receive hook.
 	BinaryPath string
 
@@ -69,6 +80,9 @@ type inflightPush struct {
 	identity auth.Identity
 	decision policy.Decision
 	decided  bool
+	// findings is what the scanners reported, kept so a held push can be
+	// shown to a reviewer without scanning again.
+	findings []finding.Finding
 	// updates is the ref list the hook reported, so a released push
 	// forwards every ref it actually touched rather than an assumed one.
 	updates []hook.RefUpdate
@@ -148,11 +162,15 @@ func (g *Gateway) Receive(ctx context.Context, id auth.Identity, repo string, bo
 	case state.decision.Verdict == policy.Hold:
 		// The quarantine repo is kept: approving the push later means
 		// forwarding these exact objects, not trusting a re-push.
+		if err := g.recordHold(ctx, push, repo, state); err != nil {
+			// Nothing was forwarded, so the safe state is preserved, but
+			// a hold nobody can find is a quarantine repo leaked to disk.
+			g.Log.Error("record held push", "push", push.ID, "repo", repo, "error", err)
+			push.Close()
+			break
+		}
 		g.Log.Info("push held for review", "push", push.ID, "repo", repo,
 			"actor", state.identity.User.Username)
-		// TODO(hold): record the held push in the store so `gateway review`
-		// can list and approve it. Until then a held push stays on disk and
-		// must be resolved by hand.
 
 	default:
 		push.Close()
@@ -246,7 +264,19 @@ func (g *Gateway) Decide(ctx context.Context, req hook.Request) hook.Response {
 	}
 
 	decision := policy.Decision{Verdict: verdict, Reasons: reasons}
-	g.setDecision(req.PushID, decision, req.Updates)
+
+	// A hold rejects at the git level, and git discards a rejected
+	// push's objects. Copy them into the quarantine repo first, while
+	// the hook is still blocked and they still exist, or there would be
+	// nothing left for a reviewer to approve.
+	if verdict == policy.Hold {
+		if err := g.preserve(ctx, state.push, git, req); err != nil {
+			g.Log.Error("preserve held objects", "push", req.PushID, "error", err)
+			return hook.Response{Err: "could not park the push for review"}
+		}
+	}
+
+	g.setDecision(req.PushID, decision, req.Updates, all)
 
 	if err := g.writeReport(req.PushID, state.push.Repo, all, decision); err != nil {
 		g.Log.Error("write sarif report", "push", req.PushID, "error", err)
@@ -387,13 +417,14 @@ func (g *Gateway) lookup(pushID string) *inflightPush {
 	return g.inflight[pushID]
 }
 
-func (g *Gateway) setDecision(pushID string, d policy.Decision, updates []hook.RefUpdate) {
+func (g *Gateway) setDecision(pushID string, d policy.Decision, updates []hook.RefUpdate, findings []finding.Finding) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if s, ok := g.inflight[pushID]; ok {
 		s.decision = d
 		s.decided = true
 		s.updates = updates
+		s.findings = findings
 	}
 }
 
@@ -403,4 +434,66 @@ func (g *Gateway) take(pushID string) *inflightPush {
 	s := g.inflight[pushID]
 	delete(g.inflight, pushID)
 	return s
+}
+
+// recordHold persists a parked push so a reviewer can find it later.
+//
+// Every ref in the push is recorded, because approval forwards all of
+// them, and the findings are stored with it so the reviewer sees what
+// the scanners saw without re-running them.
+func (g *Gateway) recordHold(ctx context.Context, push *quarantine.Push, repo string, state *inflightPush) error {
+	if g.Held == nil {
+		return fmt.Errorf("hold verdict reached but no held-push store is configured")
+	}
+
+	for i, u := range state.updates {
+		// One row per ref. The first keeps the push id so logs and the
+		// audit trail line up; the rest are suffixed.
+		id := push.ID
+		if i > 0 {
+			id = fmt.Sprintf("%s-%d", push.ID, i)
+		}
+		err := g.Held.CreateHeldPush(ctx, store.HeldPush{
+			ID:             id,
+			Repo:           repo,
+			Ref:            u.Ref,
+			OldRev:         u.OldRev,
+			NewRev:         u.NewRev,
+			ActorUserID:    state.identity.User.ID,
+			QuarantinePath: push.Path,
+			Findings:       state.findings,
+			Reasons:        state.decision.Reasons,
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// preserve copies a held push's objects out of git's receive-pack
+// quarantine into the gateway's own, and anchors a ref at each new tip
+// so a later gc cannot reclaim them.
+func (g *Gateway) preserve(ctx context.Context, push *quarantine.Push, git gitutil.Repo, req hook.Request) error {
+	if err := gitutil.ImportObjects(ctx, gitutil.At(push.Path), req.ObjectDir); err != nil {
+		return err
+	}
+	for _, dir := range strings.Split(req.AlternateObjectDirs, ":") {
+		if dir = strings.TrimSpace(dir); dir != "" {
+			if err := gitutil.ImportObjects(ctx, gitutil.At(push.Path), dir); err != nil {
+				return err
+			}
+		}
+	}
+
+	for _, u := range req.Updates {
+		if u.NewRev == gitutil.ZeroOID {
+			continue
+		}
+		ref := "refs/held/" + push.ID + "/" + strings.TrimPrefix(u.Ref, "refs/")
+		if err := gitutil.Anchor(ctx, gitutil.At(push.Path), ref, u.NewRev); err != nil {
+			return err
+		}
+	}
+	return nil
 }

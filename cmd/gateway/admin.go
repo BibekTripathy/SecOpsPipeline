@@ -10,9 +10,27 @@ import (
 	"github.com/BibekTripathy/SecOpsPipeline/internal/audit"
 	"github.com/BibekTripathy/SecOpsPipeline/internal/auth"
 	"github.com/BibekTripathy/SecOpsPipeline/internal/config"
+	"github.com/BibekTripathy/SecOpsPipeline/internal/finding"
 	"github.com/BibekTripathy/SecOpsPipeline/internal/policy"
 	"github.com/BibekTripathy/SecOpsPipeline/internal/store"
 )
+
+// defaultConfigPath is where every subcommand looks unless told otherwise.
+const defaultConfigPath = "configs/gateway.example.yaml"
+
+// findingLocation renders where a finding is, for the review output.
+func findingLocation(f finding.Finding) string {
+	switch {
+	case f.File != "" && f.Line > 0:
+		return fmt.Sprintf("%s:%d", f.File, f.Line)
+	case f.File != "":
+		return f.File
+	case f.Commit != "":
+		return shortRev(f.Commit)
+	default:
+		return "-"
+	}
+}
 
 // openDB loads the config and opens the database, which every admin
 // subcommand needs.
@@ -33,7 +51,7 @@ func openDB(ctx context.Context, configPath string) (*config.Config, *store.DB, 
 
 func runUser(args []string) error {
 	fs := flagSet("user")
-	configPath := fs.String("config", "configs/gateway.example.yaml", "configuration file")
+	configPath := fs.String("config", defaultConfigPath, "configuration file")
 	create := fs.String("create", "", "create a user with this username")
 	email := fs.String("email", "", "email address for the new user")
 	if err := fs.Parse(args); err != nil {
@@ -60,7 +78,7 @@ func runUser(args []string) error {
 
 func runToken(args []string) error {
 	fs := flagSet("token")
-	configPath := fs.String("config", "configs/gateway.example.yaml", "configuration file")
+	configPath := fs.String("config", defaultConfigPath, "configuration file")
 	username := fs.String("user", "", "username to act on")
 	issue := fs.String("issue", "", "issue a token with this name")
 	scopes := fs.String("scopes", "push", "comma-separated scopes: push, approve, admin")
@@ -164,7 +182,7 @@ func splitComma(s string) []string {
 
 func runAudit(args []string) error {
 	fs := flagSet("audit")
-	configPath := fs.String("config", "configs/gateway.example.yaml", "configuration file")
+	configPath := fs.String("config", defaultConfigPath, "configuration file")
 	verify := fs.Bool("verify", false, "verify the hash chain")
 	if err := fs.Parse(args); err != nil {
 		return err

@@ -27,6 +27,7 @@ func main() {
 		"token":  runToken,
 		"audit":  runAudit,
 		"policy": runPolicyCheck,
+		"review": runReview,
 	}
 
 	if len(os.Args) < 2 {
@@ -56,6 +57,7 @@ commands:
   token     issue and revoke access tokens
   audit     verify or read the audit log
   policy    validate a policy file
+  review    list and resolve pushes held for approval
   hook      internal: pre-receive hook mode
 
 run "gateway <command> -h" for a command's flags
