@@ -41,6 +41,8 @@ scan:
     # Point at a mirror for an air-gapped deployment.
     endpoint: ""
     timeout: 15s
+    # How long a fetched advisory is trusted before it is re-checked.
+    cache_ttl: 24h
 
 upstream:
   # The gateway's own deploy key. Developers must NOT have write access to

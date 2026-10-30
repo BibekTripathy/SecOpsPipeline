@@ -174,13 +174,11 @@ func summaryOf(raw osvVuln) string {
 
 // severityOf maps an OSV record onto our severity scale.
 //
-// database_specific.severity is used when present, because GitHub
-// advisories -- which are most of the database for the ecosystems we
-// parse -- populate it with a plain rating. Records carrying only a CVSS
-// vector fall back to Medium rather than being silently dropped.
-//
-// TODO(deps): compute the CVSS v3 base score from the vector so those
-// records get a real rating instead of the fallback.
+// The curator's own rating wins where there is one, because it reflects
+// context a vector does not carry. Otherwise the CVSS v3 base score is
+// computed from the vector. Only a record with neither falls back, and
+// Medium is chosen there so an unrated advisory is neither silently
+// ignored nor able to block a push on its own.
 func severityOf(raw osvVuln) finding.Severity {
 	switch strings.ToUpper(raw.DatabaseSpecific.Severity) {
 	case "CRITICAL":
@@ -191,6 +189,15 @@ func severityOf(raw osvVuln) finding.Severity {
 		return finding.SeverityMedium
 	case "LOW":
 		return finding.SeverityLow
+	}
+
+	for _, sev := range raw.Severity {
+		if !strings.HasPrefix(strings.ToUpper(sev.Type), "CVSS_V3") {
+			continue
+		}
+		if score, ok := CVSSScore(sev.Score); ok {
+			return SeverityFromScore(score)
+		}
 	}
 	return finding.SeverityMedium
 }

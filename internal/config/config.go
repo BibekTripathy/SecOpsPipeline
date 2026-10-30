@@ -69,6 +69,9 @@ type DepsConfig struct {
 	// developer waiting on an unreachable database is worse than a failed
 	// scan that fail_closed can act on.
 	Timeout time.Duration `yaml:"timeout"`
+	// CacheTTL is how long a fetched advisory is trusted. Advisories do
+	// get revised, so this is a day rather than forever.
+	CacheTTL time.Duration `yaml:"cache_ttl"`
 }
 
 // UpstreamConfig holds the credentials the gateway forwards with.
@@ -179,3 +182,6 @@ func (c *Config) QuarantineDir() string { return filepath.Join(c.DataDir, "quara
 func (c *Config) AuditLogPath() string  { return filepath.Join(c.DataDir, "audit.jsonl") }
 func (c *Config) ReportsDir() string    { return filepath.Join(c.DataDir, "reports") }
 func (c *Config) SocketPath() string    { return filepath.Join(c.DataDir, "hook.sock") }
+
+// AdvisoryCacheDir holds fetched vulnerability records.
+func (c *Config) AdvisoryCacheDir() string { return filepath.Join(c.DataDir, "advisories") }

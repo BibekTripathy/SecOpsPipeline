@@ -140,7 +140,7 @@ func runServe(args []string) error {
 		scanners.Register(iac.New())
 	}
 	if cfg.Scan.Dependencies.Enabled {
-		scanners.Register(newDepsScanner(cfg))
+		scanners.Register(newDepsScanner(cfg, log))
 	}
 
 	reg := metrics.New()
@@ -245,8 +245,20 @@ func runServe(args []string) error {
 //
 // The cache lives for the life of the process, so a repository's
 // dependencies are looked up once rather than on every push.
-func newDepsScanner(cfg *config.Config) *deps.Scanner {
-	client := deps.NewOSVClient(deps.NewMemoryCache())
+func newDepsScanner(cfg *config.Config, log *slog.Logger) *deps.Scanner {
+	// Prefer a cache that survives a restart; fall back to memory if
+	// the directory cannot be created, since a missing cache slows
+	// pushes down rather than breaking them.
+	var cache deps.Cache
+	disk, err := deps.NewDiskCache(cfg.AdvisoryCacheDir(), cfg.Scan.Dependencies.CacheTTL)
+	if err != nil {
+		log.Warn("advisory disk cache unavailable, using memory", "error", err)
+		cache = deps.NewMemoryCache()
+	} else {
+		cache = disk
+	}
+
+	client := deps.NewOSVClient(cache)
 	if e := cfg.Scan.Dependencies.Endpoint; e != "" {
 		client.Endpoint = e
 	}

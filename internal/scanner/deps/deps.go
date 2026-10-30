@@ -201,7 +201,3 @@ func (s *Scanner) parserFor(base string) Parser {
 	}
 	return nil
 }
-
-// TODO(deps): an on-disk cache that survives a restart, so a cold gateway
-// does not pay for detail fetches it has already made. MemoryCache is the
-// interim.
