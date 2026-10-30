@@ -74,7 +74,7 @@ then synthesise a `report-status` rejection. It does not, for three reasons:
 
 | Package | Responsibility |
 |---|---|
-| `cmd/gateway` | CLI: `serve`, `user`, `token`, `audit`, `policy`, `hook` |
+| `cmd/gateway` | CLI: `serve`, `scan`, `user`, `token`, `audit`, `policy`, `review`, `hook` |
 | `internal/transport/githttp` | smart-HTTP, Basic auth, repo-name validation |
 | `internal/gateway` | the orchestrator and the terminal renderer |
 | `internal/quarantine` | mirrors and per-push bare repos |
@@ -84,6 +84,7 @@ then synthesise a `report-status` rejection. It does not, for three reasons:
 | `internal/scanner/secrets` | patterns, entropy, verification interface |
 | `internal/scanner/deps` | OSV-backed dependency scanning, Go/npm/PyPI |
 | `internal/scanner/signature` | commit signature checking |
+| `internal/scanner/iac` | Dockerfile, Actions, Terraform, Kubernetes rules |
 | `internal/policy` | YAML rules → release / block / hold, per-repo sets |
 | `internal/finding` | the one result type every scanner emits |
 | `internal/auth` | PATs, scopes, expiry, revocation, passwords |
@@ -92,6 +93,9 @@ then synthesise a `report-status` rejection. It does not, for three reasons:
 | `internal/sarif` | SARIF 2.1.0 reports |
 | `internal/upstream` | forwarding a released push |
 | `internal/config` | configuration file and derived paths |
+| `internal/baseline` | accepted findings, with reasons and expiry |
+| `internal/metrics` | Prometheus exposition |
+| `internal/globmatch` | path globbing with `**`, shared by policy and baseline |
 
 ## Adding a scanner
 
@@ -158,6 +162,25 @@ git path changes when it is.
 - history rewriting upstream. The gateway never force-pushes, but it cannot
   stop someone who can.
 
+## Held pushes and git's own quarantine
+
+`receive-pack` has a quarantine of its own. Since git 2.11 incoming objects
+land in a temporary store named by `GIT_QUARANTINE_PATH`, and are migrated
+into the repository only once the pre-receive hook passes. Two consequences
+shaped this design:
+
+1. **The gateway cannot see the pushed objects without being told where they
+   are.** It runs as a separate process, so `gitutil.Repo` carries the object
+   directories and the hook relays them from its environment. Without that,
+   every plumbing command fails with `bad object` on exactly the commits
+   being scanned.
+2. **A rejected push's objects are discarded.** Correct for a block, fatal for
+   a hold — a hold must reject at the git level so the developer does not
+   believe the push succeeded, but the objects a reviewer needs would go with
+   it. The gateway copies them into its own quarantine while the hook is
+   still blocked, then anchors a `refs/held/<id>/...` ref so a later `gc`
+   cannot reclaim them.
+
 ## Concurrency
 
 Three places are concurrent and are what `make race` exists for:
@@ -167,13 +190,18 @@ Three places are concurrent and are what `make race` exists for:
 - `hook.Server` — one goroutine per callback, drained on `Close`
 - `Gateway.inflight` — a mutex-guarded map handing push context from the HTTP
   handler to the hook callback, which only knows a push id
+- `metrics.Registry` — observed from every scan path and read by `/metrics`
+- `gitutil.BlobReader` — safe but serialising: one pipe whose request and
+  response order must match, so parallel plugins contend there. Still far
+  cheaper than a process spawn each.
 
 ## Known gaps
 
 See [ROADMAP.md](ROADMAP.md). The ones that matter most for correctness:
 
-- a `hold` verdict keeps the quarantine repo on disk but does not yet record
-  the held push in the store, so there is nothing to approve against
-- advisories carrying only a CVSS vector fall back to Medium severity,
-  because the base score is not computed from the vector yet
-- the OSV advisory cache lives in memory, so a restart re-fetches
+- credential verification is an interface with no provider implementations,
+  so every pattern match is reported unverified
+- there is no web dashboard for reviewers; `gateway review` is the only
+  interface
+- advisories carrying neither a curated rating nor a CVSS vector fall back
+  to Medium severity
