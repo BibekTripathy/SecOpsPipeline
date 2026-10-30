@@ -38,6 +38,10 @@ upstream:
 repos:
   acme/api:
     url: git@github.com:acme/api.git
+    # Optional: this repo's own rules, instead of the global policy.
+    # Loaded and validated at startup, so a typo stops the gateway
+    # coming up rather than failing one team's push weeks later.
+    # policy_file: ./configs/policy.acme-api.yaml
 
 log:
   level: info

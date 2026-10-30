@@ -44,6 +44,19 @@ func runServe(args []string) error {
 		}
 	}
 
+	// Per-repo policies are loaded and validated here, at startup. A typo
+	// in one team's policy file must stop the gateway coming up, not
+	// surface weeks later as a failed push for that team alone.
+	policies := policy.NewSet(pol)
+	for name, repo := range cfg.Repos {
+		if repo.PolicyFile == "" {
+			continue
+		}
+		if err := policies.LoadFor(name, repo.PolicyFile); err != nil {
+			return err
+		}
+	}
+
 	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
 		return fmt.Errorf("create data dir: %w", err)
 	}
@@ -101,7 +114,7 @@ func runServe(args []string) error {
 
 	g := gateway.New(&gateway.Gateway{
 		Config:     cfg,
-		Policy:     pol,
+		Policies:   policies,
 		Scanners:   scanners,
 		Quarantine: qm,
 		Pusher:     pusher,
@@ -146,7 +159,8 @@ func runServe(args []string) error {
 		"addr", cfg.Listen,
 		"scanners", g.Scanners.Names(),
 		"policy_default", pol.Default,
-		"fail_closed", pol.FailClosed)
+		"fail_closed", pol.FailClosed,
+		"repo_policy_overrides", policies.Overrides())
 
 	if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("serve: %w", err)

@@ -79,12 +79,12 @@ then synthesise a `report-status` rejection. It does not, for three reasons:
 | `internal/gateway` | the orchestrator and the terminal renderer |
 | `internal/quarantine` | mirrors and per-push bare repos |
 | `internal/hook` | pre-receive protocol, hook mode, socket server |
-| `internal/gitutil` | git plumbing: new commits, changed files, blobs |
+| `internal/gitutil` | git plumbing: new commits, changed files, batched blob reads |
 | `internal/scanner` | plugin interface and worker pool |
 | `internal/scanner/secrets` | patterns, entropy, verification interface |
-| `internal/scanner/deps` | OSV-backed dependency scanning (interfaces) |
+| `internal/scanner/deps` | OSV-backed dependency scanning, Go/npm/PyPI |
 | `internal/scanner/signature` | commit signature checking |
-| `internal/policy` | YAML rules → release / block / hold |
+| `internal/policy` | YAML rules → release / block / hold, per-repo sets |
 | `internal/finding` | the one result type every scanner emits |
 | `internal/auth` | PATs, scopes, expiry, revocation, passwords |
 | `internal/store` | SQLite: users, tokens, held pushes |
@@ -172,8 +172,8 @@ Three places are concurrent and are what `make race` exists for:
 
 See [ROADMAP.md](ROADMAP.md). The ones that matter most for correctness:
 
-- `Gateway.forward` forwards only `refs/heads/main`; the full ref list from
-  the hook request needs threading through
 - a `hold` verdict keeps the quarantine repo on disk but does not yet record
   the held push in the store, so there is nothing to approve against
-- the dependency scanner has interfaces but no parsers or OSV client
+- advisories carrying only a CVSS vector fall back to Medium severity,
+  because the base score is not computed from the vector yet
+- the OSV advisory cache lives in memory, so a restart re-fetches

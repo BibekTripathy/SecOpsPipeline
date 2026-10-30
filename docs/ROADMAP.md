@@ -26,14 +26,14 @@ Derived from `Cloud & Security Project Ideas.pdf`, which sets the MVP at
       literal prefilter ahead of the regex layer (18-22x)
 - [x] Dependency scanner: OSV batch client with an advisory cache, and
       parsers for `go.mod`, `requirements.txt` and `package-lock.json`
+- [x] Per-repo policy files, loaded and validated at startup
 
 ## MVP remaining
 
 The doc's MVP line is "HTTP smart-git proxy, quarantine repo, secrets +
 dependency scanners, a YAML policy file, release/block, terminal output".
-All of it is now in place except per-repo policy:
+All of it is now in place.
 
-- [ ] Per-repo policy files (`repos.<name>.policy_file` is parsed but unused)
 
 ## Stretch goals
 

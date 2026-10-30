@@ -49,6 +49,12 @@ type harness struct {
 }
 
 func newHarness(t *testing.T, pol *policy.Policy) *harness {
+	return newHarnessWithPolicies(t, policy.NewSet(pol))
+}
+
+// newHarnessWithPolicies builds a gateway with per-repo policy overrides
+// already loaded.
+func newHarnessWithPolicies(t *testing.T, policies *policy.Set) *harness {
 	t.Helper()
 	requireGit(t)
 
@@ -75,13 +81,13 @@ func newHarness(t *testing.T, pol *policy.Policy) *harness {
 		t.Fatalf("create data dir: %v", err)
 	}
 
-	h.start(pol)
+	h.start(policies)
 	h.initWorkTree()
 	return h
 }
 
 // start brings up the gateway and its hook socket, and issues a push token.
-func (h *harness) start(pol *policy.Policy) {
+func (h *harness) start(policies *policy.Set) {
 	t := h.t
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -117,7 +123,7 @@ func (h *harness) start(pol *policy.Policy) {
 
 	g := gateway.New(&gateway.Gateway{
 		Config:     h.cfg,
-		Policy:     pol,
+		Policies:   policies,
 		Scanners:   scanner.NewRegistry(secrets.New(nil), signature.New(false)),
 		Quarantine: qm,
 		Pusher:     &upstream.Pusher{},

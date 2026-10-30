@@ -52,6 +52,7 @@ tested; several scanners and the reviewer UI are stubs. See
 | Scanner plugin interface + worker pool | working |
 | Secrets scanner (patterns + entropy) | working |
 | Policy engine (release/block/hold) | working |
+| Per-repo policy overrides | working |
 | Audit log (hash-chained) | working |
 | SARIF reports | working |
 | PAT auth + SQLite store | working |

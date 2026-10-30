@@ -46,8 +46,9 @@ var Version = "dev"
 
 // Gateway wires the pieces together.
 type Gateway struct {
-	Config     *config.Config
-	Policy     *policy.Policy
+	Config *config.Config
+	// Policies resolves which policy applies to each repository.
+	Policies   *policy.Set
 	Scanners   *scanner.Registry
 	Quarantine *quarantine.Manager
 	Pusher     *upstream.Pusher
@@ -196,6 +197,8 @@ func (g *Gateway) Decide(ctx context.Context, req hook.Request) hook.Response {
 		reasons  []string
 	)
 
+	pol := g.Policies.For(state.push.Repo)
+
 	git := gitutil.Repo{
 		Path:                state.push.Path,
 		ObjectDir:           req.ObjectDir,
@@ -233,7 +236,7 @@ func (g *Gateway) Decide(ctx context.Context, req hook.Request) hook.Response {
 		fs := scanner.Findings(results)
 		all = append(all, fs...)
 
-		d := g.Policy.Evaluate(fs, scanErrs)
+		d := pol.Evaluate(fs, scanErrs)
 		reasons = append(reasons, d.Reasons...)
 		if strictness(d.Verdict) > strictness(verdict) {
 			verdict = d.Verdict

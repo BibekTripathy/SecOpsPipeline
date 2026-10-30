@@ -204,3 +204,34 @@ func TestSarifReportIsWritten(t *testing.T) {
 
 // severityUnused keeps the finding import honest if tests are trimmed.
 var _ = finding.SeverityCritical
+
+// TestPerRepoPolicyOverridesTheGlobalOne: a repository with its own
+// policy file must be governed by it, not by the global default.
+func TestPerRepoPolicyOverridesTheGlobalOne(t *testing.T) {
+	// Globally permissive, but this repo blocks any finding at all.
+	global := &policy.Policy{
+		Version: 1, Default: policy.Release, FailClosed: true,
+		Rules: []policy.Rule{{Name: "noop", Scanner: "nothing", Action: policy.Hold}},
+	}
+	strict := &policy.Policy{
+		Version: 1, Default: policy.Release, FailClosed: true,
+		Rules: []policy.Rule{{Name: "strict", Scanner: "secrets", Action: policy.Block}},
+	}
+
+	policies := policy.NewSet(global)
+	policies.Set(repoName, strict)
+
+	h := newHarnessWithPolicies(t, policies)
+	h.commit("config.go", "package main\n\nconst key = \"AKIAIOSFODNN7EXAMPLE\"\n", "add config")
+
+	out, err := h.push("main")
+	if err == nil {
+		t.Fatalf("the repo's own policy should have blocked this push:\n%s", out)
+	}
+	if h.upstreamRev("refs/heads/main") != "" {
+		t.Error("a blocked push reached upstream")
+	}
+	if v := h.auditVerdicts(); len(v) != 1 || v[0] != "block" {
+		t.Errorf("audit verdicts = %v, want [block]", v)
+	}
+}
