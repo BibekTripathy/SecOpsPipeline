@@ -1,0 +1,28 @@
+# Findings this organisation has accepted.
+#
+# A baseline exists so the gateway can be turned on in front of a
+# repository that already has history. Without it the first push is
+# blocked by findings nobody can fix in the moment, and the usual
+# response is to disable the tool -- the worst outcome available.
+#
+# Two rules keep this from becoming a quiet way to switch scanning off:
+# every entry needs a reason, and waived findings still appear in the
+# SARIF report and the audit count. Prefer an `expires` date: an
+# exception that has to be renewed is one somebody is still thinking
+# about.
+version: 1
+
+entries:
+  - rule: aws-access-key-id
+    path: "test/redteam/*"
+    reason: planted secrets for the detection corpus, not real credentials
+
+  - scanner: iac
+    rule: docker-latest-tag
+    path: "examples/*"
+    reason: example compose files, not deployed
+    expires: "2027-01-01"
+
+  - rule: commit-unsigned
+    reason: commit signing is being rolled out, see TICKET-412
+    expires: "2026-12-31"

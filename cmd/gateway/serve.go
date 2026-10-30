@@ -4,19 +4,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/BibekTripathy/SecOpsPipeline/internal/audit"
+	"github.com/BibekTripathy/SecOpsPipeline/internal/baseline"
 	"github.com/BibekTripathy/SecOpsPipeline/internal/config"
 	"github.com/BibekTripathy/SecOpsPipeline/internal/gateway"
 	"github.com/BibekTripathy/SecOpsPipeline/internal/hook"
+	"github.com/BibekTripathy/SecOpsPipeline/internal/metrics"
 	"github.com/BibekTripathy/SecOpsPipeline/internal/policy"
 	"github.com/BibekTripathy/SecOpsPipeline/internal/quarantine"
 	"github.com/BibekTripathy/SecOpsPipeline/internal/scanner"
 	"github.com/BibekTripathy/SecOpsPipeline/internal/scanner/deps"
+	"github.com/BibekTripathy/SecOpsPipeline/internal/scanner/iac"
 	"github.com/BibekTripathy/SecOpsPipeline/internal/scanner/secrets"
 	"github.com/BibekTripathy/SecOpsPipeline/internal/scanner/signature"
 	"github.com/BibekTripathy/SecOpsPipeline/internal/store"
@@ -44,9 +48,9 @@ func runServe(args []string) error {
 		}
 	}
 
-	// Per-repo policies are loaded and validated here, at startup. A typo
-	// in one team's policy file must stop the gateway coming up, not
-	// surface weeks later as a failed push for that team alone.
+	// Per-repo policies and baselines are loaded and validated here, at
+	// startup. A typo in one team's file must stop the gateway coming
+	// up, not surface weeks later as a failed push for that team alone.
 	policies := policy.NewSet(pol)
 	for name, repo := range cfg.Repos {
 		if repo.PolicyFile == "" {
@@ -54,6 +58,30 @@ func runServe(args []string) error {
 		}
 		if err := policies.LoadFor(name, repo.PolicyFile); err != nil {
 			return err
+		}
+	}
+
+	var globalBaseline *baseline.Baseline
+	if cfg.BaselineFile != "" {
+		if globalBaseline, err = baseline.Load(cfg.BaselineFile); err != nil {
+			return err
+		}
+	}
+	baselines := baseline.NewSet(globalBaseline)
+	for name, repo := range cfg.Repos {
+		if repo.BaselineFile == "" {
+			continue
+		}
+		if err := baselines.LoadFor(name, repo.BaselineFile); err != nil {
+			return err
+		}
+	}
+	// An exception that has lapsed is worth saying out loud: the finding
+	// is about to come back and somebody has to decide again.
+	for name, b := range baselines.All() {
+		for _, e := range b.Expired(time.Now()) {
+			log.Warn("baseline entry has expired and no longer applies",
+				"repo", name, "rule", e.Rule, "path", e.Path, "reason", e.Reason)
 		}
 	}
 
@@ -108,9 +136,21 @@ func runServe(args []string) error {
 		secrets.New(verifier),
 		signature.New(cfg.Scan.RequireSignedCommits),
 	)
+	if cfg.Scan.IaC {
+		scanners.Register(iac.New())
+	}
 	if cfg.Scan.Dependencies.Enabled {
 		scanners.Register(newDepsScanner(cfg))
 	}
+
+	reg := metrics.New()
+	reg.SetHeldGauge(func() int {
+		held, err := db.ListHeldPushes(context.Background(), store.HeldPending)
+		if err != nil {
+			return -1
+		}
+		return len(held)
+	})
 
 	g := gateway.New(&gateway.Gateway{
 		Config:     cfg,
@@ -120,6 +160,8 @@ func runServe(args []string) error {
 		Pusher:     pusher,
 		Audit:      auditLog,
 		Held:       db,
+		Baselines:  baselines,
+		Metrics:    reg,
 		Log:        log,
 		BinaryPath: binary,
 	})
@@ -134,6 +176,32 @@ func runServe(args []string) error {
 			log.Error("hook server stopped", "error", err)
 		}
 	}()
+
+	// Operational endpoints live on their own listener: /metrics
+	// describes the organisation's security posture and is not
+	// something to hand to everyone holding a push token.
+	var adminSrv *http.Server
+	if cfg.AdminListen != "" {
+		adminSrv = &http.Server{
+			Addr: cfg.AdminListen,
+			Handler: githttp.AdminMux(reg.Handler(), func() error {
+				return db.SQL().PingContext(ctx)
+			}, gateway.Version),
+			ReadHeaderTimeout: 10 * time.Second,
+		}
+		go func() {
+			if err := adminSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Error("admin listener stopped", "error", err)
+			}
+		}()
+		log.Info("admin endpoints listening", "addr", cfg.AdminListen,
+			"paths", []string{"/metrics", "/healthz", "/readyz"})
+	}
+
+	// Reclaim quarantine repositories from holds nobody reviews.
+	if cfg.HoldExpiry > 0 {
+		go runHoldExpiry(ctx, cfg, db, auditLog, pusher, log)
+	}
 
 	httpSrv := &http.Server{
 		Addr: cfg.Listen,
@@ -153,6 +221,9 @@ func runServe(args []string) error {
 		log.Info("shutting down; waiting for in-flight pushes")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
+		if adminSrv != nil {
+			adminSrv.Shutdown(shutdownCtx)
+		}
 		httpSrv.Shutdown(shutdownCtx)
 	}()
 
@@ -185,4 +256,44 @@ func newDepsScanner(cfg *config.Config) *deps.Scanner {
 		s.Timeout = t
 	}
 	return s
+}
+
+// runHoldExpiry periodically resolves held pushes nobody reviewed and
+// reclaims their quarantine repositories.
+//
+// Without it, a hold that is never looked at keeps a bare repository on
+// disk indefinitely. The interval is a fraction of the expiry window, so
+// a push is reclaimed reasonably soon after lapsing without the check
+// itself being frequent.
+func runHoldExpiry(ctx context.Context, cfg *config.Config, db *store.DB,
+	auditLog *audit.Log, pusher *upstream.Pusher, log *slog.Logger) {
+
+	interval := cfg.HoldExpiry / 12
+	if interval < time.Minute {
+		interval = time.Minute
+	}
+	if interval > time.Hour {
+		interval = time.Hour
+	}
+
+	reviewer := &gateway.Reviewer{Config: cfg, DB: db, Audit: auditLog, Pusher: pusher}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			stale, err := reviewer.Expire(ctx, cfg.HoldExpiry)
+			if err != nil {
+				log.Error("expire held pushes", "error", err)
+				continue
+			}
+			if len(stale) > 0 {
+				log.Info("expired held pushes nobody reviewed",
+					"count", len(stale), "older_than", cfg.HoldExpiry)
+			}
+		}
+	}
 }

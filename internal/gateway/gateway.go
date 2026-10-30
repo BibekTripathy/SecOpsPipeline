@@ -25,16 +25,19 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/BibekTripathy/SecOpsPipeline/internal/audit"
 	"github.com/BibekTripathy/SecOpsPipeline/internal/auth"
+	"github.com/BibekTripathy/SecOpsPipeline/internal/baseline"
 	"github.com/BibekTripathy/SecOpsPipeline/internal/config"
 	"github.com/BibekTripathy/SecOpsPipeline/internal/finding"
 	"github.com/BibekTripathy/SecOpsPipeline/internal/gitutil"
 	"github.com/BibekTripathy/SecOpsPipeline/internal/hook"
+	"github.com/BibekTripathy/SecOpsPipeline/internal/metrics"
 	"github.com/BibekTripathy/SecOpsPipeline/internal/policy"
 	"github.com/BibekTripathy/SecOpsPipeline/internal/quarantine"
 	"github.com/BibekTripathy/SecOpsPipeline/internal/sarif"
@@ -65,6 +68,11 @@ type Gateway struct {
 	// Held records pushes parked by a hold verdict. Nil disables the
 	// hold flow, and a hold then behaves as a block.
 	Held HeldStore
+	// Baselines resolves a repository's accepted findings. Nil
+	// suppresses nothing.
+	Baselines *baseline.Set
+	// Metrics is optional; nil disables instrumentation.
+	Metrics *metrics.Registry
 	// BinaryPath is this executable, installed as the pre-receive hook.
 	BinaryPath string
 
@@ -208,11 +216,14 @@ func (g *Gateway) Decide(ctx context.Context, req hook.Request) hook.Response {
 		defer cancel()
 	}
 
+	started := time.Now()
+
 	var (
-		all      []finding.Finding
-		scanErrs int
-		verdict  = policy.Release
-		reasons  []string
+		all        []finding.Finding
+		suppressed []baseline.Suppressed
+		scanErrs   int
+		verdict    = policy.Release
+		reasons    []string
 	)
 
 	pol := g.Policies.For(state.push.Repo)
@@ -246,12 +257,29 @@ func (g *Gateway) Decide(ctx context.Context, req hook.Request) hook.Response {
 
 		target.Blobs = blobs
 		results := g.Scanners.Run(ctx, target, g.Config.Scan.Workers)
-		for _, r := range scanner.Errors(results) {
-			scanErrs++
-			g.Log.Error("scanner failed", "push", req.PushID, "scanner", r.Scanner, "error", r.Err)
+		for _, r := range results {
+			g.observeScanner(r)
+			if r.Err != nil {
+				scanErrs++
+				g.Log.Error("scanner failed", "push", req.PushID, "scanner", r.Scanner, "error", r.Err)
+			}
 		}
 
+		// Accepted findings are removed before the policy sees them, but
+		// are still logged and counted, so a growing baseline is visible
+		// rather than silent.
 		fs := scanner.Findings(results)
+		if g.Baselines != nil {
+			applied := g.Baselines.For(state.push.Repo).Apply(fs, time.Now())
+			if n := len(applied.Suppressed); n > 0 {
+				g.Log.Info("findings waived by baseline",
+					"push", req.PushID, "repo", state.push.Repo, "count", n)
+				suppressed = append(suppressed, applied.Suppressed...)
+				g.observeSuppressed(n)
+			}
+			fs = applied.Reported
+		}
+		g.observeFindings(fs)
 		all = append(all, fs...)
 
 		d := pol.Evaluate(fs, scanErrs)
@@ -278,9 +306,11 @@ func (g *Gateway) Decide(ctx context.Context, req hook.Request) hook.Response {
 
 	g.setDecision(req.PushID, decision, req.Updates, all)
 
-	if err := g.writeReport(req.PushID, state.push.Repo, all, decision); err != nil {
+	if err := g.writeReport(req.PushID, state.push.Repo, all, suppressed, decision); err != nil {
 		g.Log.Error("write sarif report", "push", req.PushID, "error", err)
 	}
+
+	g.observeScan(time.Since(started), string(verdict))
 
 	return hook.Response{
 		Verdict: verdict,
@@ -335,7 +365,7 @@ func (g *Gateway) record(ctx context.Context, state *inflightPush, u hook.RefUpd
 	}
 }
 
-func (g *Gateway) writeReport(pushID, repo string, fs []finding.Finding, d policy.Decision) error {
+func (g *Gateway) writeReport(pushID, repo string, fs []finding.Finding, suppressed []baseline.Suppressed, d policy.Decision) error {
 	if err := os.MkdirAll(g.Config.ReportsDir(), 0o700); err != nil {
 		return fmt.Errorf("create reports dir: %w", err)
 	}
@@ -346,12 +376,21 @@ func (g *Gateway) writeReport(pushID, repo string, fs []finding.Finding, d polic
 	}
 	defer f.Close()
 
-	return sarif.Write(f, sarif.Build(fs, Version, map[string]string{
+	props := map[string]string{
 		"push_id": pushID,
 		"repo":    repo,
 		"verdict": string(d.Verdict),
 		"time":    time.Now().UTC().Format(time.RFC3339),
-	}))
+	}
+	if len(suppressed) > 0 {
+		props["suppressed_count"] = strconv.Itoa(len(suppressed))
+	}
+
+	// Waived findings go into the report too, marked suppressed, so the
+	// record shows what the baseline hid rather than quietly dropping it.
+	report := sarif.Build(fs, Version, props)
+	sarif.AppendSuppressed(&report, toSarifSuppressed(suppressed))
+	return sarif.Write(f, report)
 }
 
 // forward sends every ref the push updated to the real remote.
@@ -496,4 +535,43 @@ func (g *Gateway) preserve(ctx context.Context, push *quarantine.Push, git gitut
 		}
 	}
 	return nil
+}
+
+// toSarifSuppressed converts waived findings for the report.
+func toSarifSuppressed(ss []baseline.Suppressed) []sarif.SuppressedFinding {
+	out := make([]sarif.SuppressedFinding, len(ss))
+	for i, s := range ss {
+		out[i] = sarif.SuppressedFinding{Finding: s.Finding, Justification: s.Reason}
+	}
+	return out
+}
+
+func (g *Gateway) observeScan(d time.Duration, verdict string) {
+	if g.Metrics == nil {
+		return
+	}
+	g.Metrics.ObserveScan(d)
+	g.Metrics.ObserveVerdict(verdict)
+}
+
+func (g *Gateway) observeScanner(r scanner.Result) {
+	if g.Metrics == nil {
+		return
+	}
+	g.Metrics.ObserveScanner(r.Scanner, r.Duration, r.Err != nil)
+}
+
+func (g *Gateway) observeFindings(fs []finding.Finding) {
+	if g.Metrics == nil {
+		return
+	}
+	for _, f := range fs {
+		g.Metrics.ObserveFinding(f.Scanner, f.Severity.String())
+	}
+}
+
+func (g *Gateway) observeSuppressed(n int) {
+	if g.Metrics != nil {
+		g.Metrics.ObserveSuppressed(n)
+	}
 }

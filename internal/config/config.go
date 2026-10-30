@@ -19,6 +19,16 @@ type Config struct {
 	DataDir string `yaml:"data_dir"`
 	// PolicyFile is the policy to evaluate. Empty uses the built-in default.
 	PolicyFile string `yaml:"policy_file"`
+	// BaselineFile lists findings accepted across all repositories.
+	BaselineFile string `yaml:"baseline_file"`
+
+	// AdminListen serves /metrics, /healthz and /readyz. It is separate
+	// from the push listener so operational endpoints are not exposed on
+	// the address developers reach. Empty disables them.
+	AdminListen string `yaml:"admin_listen"`
+
+	// HoldExpiry reclaims held pushes nobody reviews. Zero disables it.
+	HoldExpiry time.Duration `yaml:"hold_expiry"`
 
 	Scan     ScanConfig      `yaml:"scan"`
 	Upstream UpstreamConfig  `yaml:"upstream"`
@@ -40,6 +50,9 @@ type ScanConfig struct {
 	Verify bool `yaml:"verify_secrets"`
 	// RequireSignedCommits reports every unsigned commit.
 	RequireSignedCommits bool `yaml:"require_signed_commits"`
+	// IaC enables Dockerfile, GitHub Actions, Terraform and Kubernetes
+	// checks. It is local pattern matching, so it costs nothing extra.
+	IaC bool `yaml:"iac"`
 
 	// Dependencies enables the OSV-backed dependency scanner. It makes a
 	// network call on any push that changes a manifest, so it is opt-in.
@@ -70,6 +83,8 @@ type Repo struct {
 	URL string `yaml:"url"`
 	// PolicyFile overrides the global policy for this repo.
 	PolicyFile string `yaml:"policy_file"`
+	// BaselineFile overrides the global baseline for this repo.
+	BaselineFile string `yaml:"baseline_file"`
 }
 
 type LogConfig struct {
@@ -82,12 +97,15 @@ type LogConfig struct {
 // Default returns a runnable local configuration.
 func Default() *Config {
 	return &Config{
-		Listen:  "127.0.0.1:8080",
-		DataDir: "./data",
+		Listen:      "127.0.0.1:8080",
+		AdminListen: "127.0.0.1:9090",
+		DataDir:     "./data",
+		HoldExpiry:  7 * 24 * time.Hour,
 		Scan: ScanConfig{
 			Workers:      4,
 			Timeout:      5 * time.Minute,
 			MaxPushBytes: 512 << 20,
+			IaC:          true,
 		},
 		Repos: map[string]Repo{},
 		Log:   LogConfig{Level: "info", Format: "text"},
@@ -130,6 +148,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Scan.Dependencies.Timeout < 0 {
 		return fmt.Errorf("scan.dependencies.timeout must not be negative")
+	}
+	if c.HoldExpiry < 0 {
+		return fmt.Errorf("hold_expiry must not be negative")
+	}
+	if c.AdminListen != "" && c.AdminListen == c.Listen {
+		return fmt.Errorf("admin_listen must differ from listen, or /metrics is exposed to anyone who can push")
 	}
 	for name, repo := range c.Repos {
 		if repo.URL == "" {

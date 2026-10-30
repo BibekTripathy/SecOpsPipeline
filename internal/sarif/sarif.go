@@ -61,11 +61,19 @@ type ReportingConfig struct {
 }
 
 type Result struct {
-	RuleID     string            `json:"ruleId"`
-	Level      string            `json:"level"`
-	Message    Message           `json:"message"`
-	Locations  []Location        `json:"locations,omitempty"`
-	Properties map[string]string `json:"properties,omitempty"`
+	RuleID       string            `json:"ruleId"`
+	Level        string            `json:"level"`
+	Message      Message           `json:"message"`
+	Locations    []Location        `json:"locations,omitempty"`
+	Properties   map[string]string `json:"properties,omitempty"`
+	Suppressions []Suppression     `json:"suppressions,omitempty"`
+}
+
+// Suppression marks a result as accepted. SARIF-aware tools hide
+// suppressed results by default while keeping them in the record.
+type Suppression struct {
+	Kind          string `json:"kind"`
+	Justification string `json:"justification,omitempty"`
 }
 
 type Message struct {
@@ -196,4 +204,48 @@ func Write(w io.Writer, log Log) error {
 		return fmt.Errorf("write sarif: %w", err)
 	}
 	return nil
+}
+
+// SuppressedFinding is a finding waived by a baseline.
+type SuppressedFinding struct {
+	Finding       finding.Finding
+	Justification string
+}
+
+// AppendSuppressed adds waived findings to a log, marked with SARIF's
+// own suppression mechanism.
+//
+// They are included rather than dropped so the report shows what the
+// baseline hid: a reader can see the exception, its justification, and
+// decide whether it still holds. Tools that honour SARIF suppressions
+// will hide them from the default view anyway.
+func AppendSuppressed(log *Log, suppressed []SuppressedFinding) {
+	if len(suppressed) == 0 || len(log.Runs) == 0 {
+		return
+	}
+	run := &log.Runs[0]
+
+	for _, s := range suppressed {
+		f := s.Finding
+		r := Result{
+			RuleID:     f.RuleID,
+			Level:      level(f.Severity),
+			Message:    Message{Text: resultMessage(f)},
+			Properties: resultProperties(f),
+			Suppressions: []Suppression{{
+				Kind:          "external",
+				Justification: s.Justification,
+			}},
+		}
+		if f.File != "" {
+			loc := Location{PhysicalLocation: PhysicalLocation{
+				ArtifactLocation: ArtifactLocation{URI: f.File},
+			}}
+			if f.Line > 0 {
+				loc.PhysicalLocation.Region = &Region{StartLine: f.Line}
+			}
+			r.Locations = append(r.Locations, loc)
+		}
+		run.Results = append(run.Results, r)
+	}
 }

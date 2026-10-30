@@ -33,10 +33,14 @@ rules:
     min_severity: high
     action: hold
 
-  # Infrastructure changes get a human look rather than an automatic reject.
-  - name: iac-change-review
+  - name: critical-infrastructure-change
     scanner: iac
-    path_glob: "*.tf"
+    min_severity: critical
+    action: block
+
+  - name: risky-infrastructure-change
+    scanner: iac
+    min_severity: high
     action: hold
 
   - name: unsigned-commit
