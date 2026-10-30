@@ -51,7 +51,11 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=ref,event=branch
             type=sha,format=long
-            type=raw,value=latest,enable={{is_default_branch}}
+          # latest=auto points :latest at the newest semver tag, which is
+          # what a release means. Gating it on the default branch instead
+          # would leave a tagged release without a :latest.
+          flavor: |
+            latest=auto
 
       - name: version stamp
         id: version
@@ -154,7 +158,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           name="gateway-${{ matrix.goos }}-${{ matrix.goarch }}"
+          # The three matrix jobs run concurrently, so creating the
+          # release is a race: whoever loses just finds it already there.
           if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            gh release create "${GITHUB_REF_NAME}" --generate-notes --verify-tag
+            gh release create "${GITHUB_REF_NAME}" --generate-notes --verify-tag \
+              || gh release view "${GITHUB_REF_NAME}" >/dev/null
           fi
           gh release upload "${GITHUB_REF_NAME}" "${name}" "${name}.sha256" --clobber

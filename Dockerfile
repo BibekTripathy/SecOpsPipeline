@@ -3,9 +3,6 @@
 # ---- build ----------------------------------------------------------
 FROM golang:1.27-alpine AS build
 
-# git is needed at build time only for the version stamp.
-RUN apk add --no-cache git
-
 WORKDIR /src
 
 # Dependencies first, so a source-only change reuses this layer.
