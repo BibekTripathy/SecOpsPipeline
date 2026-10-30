@@ -27,6 +27,16 @@ Derived from `Cloud & Security Project Ideas.pdf`, which sets the MVP at
 - [x] Dependency scanner: OSV batch client with an advisory cache, and
       parsers for `go.mod`, `requirements.txt` and `package-lock.json`
 - [x] Per-repo policy files, loaded and validated at startup
+- [x] Hold-for-approval: persisted held pushes, `gateway review` to list,
+      inspect, approve, reject and expire them
+- [x] IaC scanner: Dockerfile, GitHub Actions, Terraform, Kubernetes
+- [x] Baselines: reviewable accepted findings, with required reasons and
+      expiry dates
+- [x] Prometheus metrics and `/healthz` + `/readyz` on a separate listener
+- [x] CVSS v3 base scores computed from the vector
+- [x] On-disk advisory cache that survives a restart
+- [x] Container image, CI, and a release pipeline with an image smoke test
+- [x] `gateway scan` for local files, used to gate this repository itself
 
 ## MVP remaining
 
@@ -39,23 +49,12 @@ All of it is now in place.
 
 From the doc, roughly in the order they pay off:
 
-- [ ] **OSV response cache on disk**, so a restarted gateway does not
-      re-fetch advisories it already has. `MemoryCache` is the interim.
-- [ ] **CVSS v3 base score** computed from the vector, so advisories that
-      carry only a CVSS vector get a real severity instead of the
-      documented Medium fallback.
 - [ ] **Credential verification**: per-provider read-only checks behind the
       existing `secrets.Verifier` interface (AWS STS, GitHub `/user`, Slack
       `auth.test`, Stripe `/v1/account`). Needs a shared rate limiter and an
       opt-out — it sends the secret to a third party.
-- [ ] **Hold-for-approval**: persist held pushes to the `held_pushes` table,
-      add `gateway review -list` / `-approve`, then the small web dashboard.
 - [ ] **Sigstore / gitsign**: verify against the Fulcio root and the Rekor
       log instead of the local git keyring.
-- [ ] **Prometheus metrics**: scan latency histogram, verdict counters, block
-      rate, scanner error rate.
-- [ ] **IaC scanner**: reuse the Cloud Workflow Validator as a plugin —
-      Dockerfiles, GitHub Actions, Terraform.
 - [ ] **SAST**: Semgrep as a plugin, running only over changed files.
 
 ## Deliberately out of scope
@@ -96,3 +95,23 @@ the scanner **misses**, and let the rate fall. Candidates are Azure
 connection strings, GCP service-account JSON, npm and PyPI publish tokens,
 HashiCorp Vault tokens, Twilio and SendGrid keys, and base64- or
 hex-wrapped credentials that defeat the pattern layer.
+
+## Honest gaps
+
+Things a reader should know are missing, rather than discover:
+
+- **Credential verification has no provider implementations.** The
+  `secrets.Verifier` interface and the severity plumbing exist, but every
+  pattern match is currently reported unverified. The practical effect is
+  that a rotated example key and a live production key look the same to the
+  policy engine.
+- **No web dashboard for reviewers.** `gateway review` is the only interface.
+  This is fine for a small team and will not scale to many held pushes.
+- **No SAST.** Semgrep as a plugin is the intended route; writing a weak
+  one in-house would be worse than having none.
+- **No Sigstore / gitsign.** Signature checking relies on the git binary's
+  own keyring, so keyless signing verifies as "untrusted key".
+- **Advisories with neither a curated rating nor a CVSS vector** fall back to
+  Medium severity.
+- **`describe` costs a flat ~3.5 ms** of two git process spawns per push.
+  Only noticeable on very small pushes.
