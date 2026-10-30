@@ -1,0 +1,11 @@
+# Keep the build context small and free of anything secret.
+.git
+bin/
+data/
+coverage.out
+*.sarif.json
+
+# Nothing in these is needed to build the binary.
+docs/
+*.md
+!README.md

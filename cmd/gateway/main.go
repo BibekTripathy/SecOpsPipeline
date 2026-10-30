@@ -28,6 +28,7 @@ func main() {
 		"audit":  runAudit,
 		"policy": runPolicyCheck,
 		"review": runReview,
+		"scan":   runScan,
 	}
 
 	if len(os.Args) < 2 {
@@ -58,6 +59,7 @@ commands:
   audit     verify or read the audit log
   policy    validate a policy file
   review    list and resolve pushes held for approval
+  scan      scan local files with the same rules a push gets
   hook      internal: pre-receive hook mode
 
 run "gateway <command> -h" for a command's flags

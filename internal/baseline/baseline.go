@@ -19,11 +19,11 @@ package baseline
 import (
 	"fmt"
 	"os"
-	"path"
 	"strings"
 	"time"
 
 	"github.com/BibekTripathy/SecOpsPipeline/internal/finding"
+	"github.com/BibekTripathy/SecOpsPipeline/internal/globmatch"
 	"gopkg.in/yaml.v3"
 )
 
@@ -87,10 +87,8 @@ func (b *Baseline) Validate() error {
 		if e.matchesEverything() {
 			return fmt.Errorf("entries[%d]: must narrow by rule, scanner or path", i)
 		}
-		if e.Path != "" {
-			if _, err := path.Match(e.Path, "probe"); err != nil {
-				return fmt.Errorf("entries[%d]: bad path glob %q: %w", i, e.Path, err)
-			}
+		if e.Path != "" && !globmatch.Valid(e.Path) {
+			return fmt.Errorf("entries[%d]: bad path glob %q", i, e.Path)
 		}
 		if e.Expires != "" {
 			t, err := time.Parse("2006-01-02", e.Expires)
@@ -153,11 +151,8 @@ func (b *Baseline) match(f finding.Finding, now time.Time) (Entry, bool) {
 		if e.Scanner != "" && e.Scanner != "*" && e.Scanner != f.Scanner {
 			continue
 		}
-		if e.Path != "" {
-			ok, err := path.Match(e.Path, f.File)
-			if err != nil || !ok {
-				continue
-			}
+		if e.Path != "" && !globmatch.Match(e.Path, f.File) {
+			continue
 		}
 		return e, true
 	}

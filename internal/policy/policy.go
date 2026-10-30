@@ -9,10 +9,10 @@ package policy
 import (
 	"fmt"
 	"os"
-	"path"
 	"strings"
 
 	"github.com/BibekTripathy/SecOpsPipeline/internal/finding"
+	"github.com/BibekTripathy/SecOpsPipeline/internal/globmatch"
 	"gopkg.in/yaml.v3"
 )
 
@@ -150,10 +150,8 @@ func (p *Policy) Validate() error {
 		if !r.Action.valid() {
 			return fmt.Errorf("rule %q: unknown action %q", r.Name, r.Action)
 		}
-		if r.PathGlob != "" {
-			if _, err := path.Match(r.PathGlob, "probe"); err != nil {
-				return fmt.Errorf("rule %q: bad path_glob %q: %w", r.Name, r.PathGlob, err)
-			}
+		if r.PathGlob != "" && !globmatch.Valid(r.PathGlob) {
+			return fmt.Errorf("rule %q: bad path_glob %q", r.Name, r.PathGlob)
 		}
 	}
 	return nil
@@ -200,20 +198,14 @@ func (r Rule) matches(f finding.Finding) bool {
 	if r.Scanner != "" && r.Scanner != "*" && r.Scanner != f.Scanner {
 		return false
 	}
-	if r.RuleID != "" && r.RuleID != "*" {
-		ok, err := path.Match(r.RuleID, f.RuleID)
-		if err != nil || !ok {
-			return false
-		}
+	if r.RuleID != "" && r.RuleID != "*" && !globmatch.Match(r.RuleID, f.RuleID) {
+		return false
 	}
 	if r.MinSeverity != nil && f.Severity < *r.MinSeverity {
 		return false
 	}
-	if r.PathGlob != "" {
-		ok, err := path.Match(r.PathGlob, f.File)
-		if err != nil || !ok {
-			return false
-		}
+	if r.PathGlob != "" && !globmatch.Match(r.PathGlob, f.File) {
+		return false
 	}
 	return true
 }

@@ -1,0 +1,45 @@
+# Configuration baked into the container image.
+#
+# It differs from the local example in three ways that matter in a
+# container: both listeners bind all interfaces rather than loopback,
+# state lives on the /data volume, and nothing is written inside the
+# image itself.
+#
+# Override it by mounting your own file and pointing -config at it, or
+# bind-mount over /etc/gateway/gateway.yaml.
+
+listen: 0.0.0.0:8080
+admin_listen: 0.0.0.0:9090
+
+data_dir: /data
+
+policy_file: /etc/gateway/policy.yaml
+baseline_file: ""
+
+hold_expiry: 168h
+
+scan:
+  workers: 4
+  timeout: 5m
+  max_push_bytes: 536870912
+  verify_secrets: false
+  require_signed_commits: false
+  iac: true
+  dependencies:
+    enabled: false
+    endpoint: ""
+    timeout: 15s
+    cache_ttl: 24h
+
+upstream:
+  # Mount the deploy key read-only and point this at it:
+  #   -v /host/key:/etc/gateway/deploy_key:ro
+  ssh_key_path: ""
+  known_hosts_path: ""
+
+# Repositories this gateway fronts. Override this file to set them.
+repos: {}
+
+log:
+  level: info
+  format: json

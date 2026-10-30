@@ -1,0 +1,160 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  image:
+    name: build and publish image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Needed to push to GHCR and to attach provenance to the image.
+      packages: write
+      id-token: write
+      attestations: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: log in to ghcr
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: derive tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=ref,event=branch
+            type=sha,format=long
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: version stamp
+        id: version
+        run: echo "version=$(git describe --tags --always --dirty)" >> "$GITHUB_OUTPUT"
+
+      - name: build and push
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          # arm64 matters: a home lab or a dev machine is as likely to
+          # be arm as amd64, and this is a tool people self-host.
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+          sbom: true
+
+      # A signed statement of what produced the image, so a consumer can
+      # verify it came from this workflow and not from someone's laptop.
+      - name: attest provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+  smoke:
+    name: smoke test the image
+    needs: image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: log in to ghcr
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Publishing an image that cannot start is worse than not
+      # publishing one, so prove it runs and serves a push end to end.
+      - name: run the published image against a real push
+        run: ./scripts/smoke-test.sh ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+
+  binaries:
+    name: release binaries
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: arm64
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          version="${GITHUB_REF_NAME}"
+          name="gateway-${GOOS}-${GOARCH}"
+          go build -trimpath \
+            -ldflags "-s -w -X github.com/BibekTripathy/SecOpsPipeline/internal/gateway.Version=${version}" \
+            -o "${name}" ./cmd/gateway
+          sha256sum "${name}" > "${name}.sha256"
+
+      # Uploaded with the preinstalled gh CLI rather than a third-party
+      # action. The gateway's own IaC scanner flags an action pinned to
+      # a mutable tag, and removing the dependency is a better answer
+      # than pinning a SHA nobody rechecks.
+      - name: upload to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          name="gateway-${{ matrix.goos }}-${{ matrix.goarch }}"
+          if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release create "${GITHUB_REF_NAME}" --generate-notes --verify-tag
+          fi
+          gh release upload "${GITHUB_REF_NAME}" "${name}" "${name}.sha256" --clobber

@@ -1,0 +1,60 @@
+# Run the gateway locally.
+#
+#   docker compose up -d
+#   docker compose exec gateway gateway user  -create alice -config /etc/gateway/gateway.yaml
+#   docker compose exec gateway gateway token -user alice -issue laptop -config /etc/gateway/gateway.yaml
+#
+# Then point a repository at it:
+#   git remote add gateway http://token:<sqg_...>@localhost:8080/acme/api.git
+
+services:
+  gateway:
+    image: ghcr.io/bibektripathy/secopspipeline:latest
+    # Build locally instead with: docker compose build
+    build:
+      context: .
+      args:
+        VERSION: local
+    container_name: commit-quarantine-gateway
+    restart: unless-stopped
+
+    ports:
+      # The push endpoint developers use.
+      - "8080:8080"
+      # Operational endpoints. Bound to loopback on purpose: /metrics
+      # describes your security posture.
+      - "127.0.0.1:9090:9090"
+
+    volumes:
+      # Quarantine repositories, the database, the audit log and SARIF
+      # reports. Back this up; the audit log is the record of every
+      # verdict the gateway has ever reached.
+      - gateway-data:/data
+      - ./configs/gateway.docker.yaml:/etc/gateway/gateway.yaml:ro
+      - ./configs/policy.example.yaml:/etc/gateway/policy.yaml:ro
+      # The gateway's own deploy key, read-only. Developers must not
+      # have write access to the upstream remote; this key is what
+      # makes the gateway the only path to it.
+      # - ./secrets/deploy_key:/etc/gateway/deploy_key:ro
+
+    environment:
+      # Overridden here rather than in the image, so the published
+      # image stays environment-agnostic.
+      TZ: UTC
+
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9090/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+    # The gateway spawns a git process per push and writes to /data.
+    # It needs no more than that.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  gateway-data:

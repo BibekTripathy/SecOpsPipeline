@@ -1,0 +1,44 @@
+# Findings this repository has accepted.
+#
+# This is the gateway's own baseline, used by `make scan`. It is a real
+# one, not an example: the entries below are what scanning this project
+# with its own rules actually turns up.
+version: 1
+
+entries:
+  - rule: aws-access-key-id
+    path: "scripts/*"
+    reason: >-
+      AWS's own published example key id, used as a fixture in the
+      image smoke test to prove a secret gets blocked. Not a credential.
+
+  - scanner: secrets
+    path: "test/redteam/*"
+    reason: >-
+      The detection corpus. Credential strings there are generated from
+      shape templates at run time rather than committed, but the
+      templates themselves read as credential-shaped.
+
+  - scanner: secrets
+    path: "internal/scanner/secrets/*"
+    reason: >-
+      Detection rules and their unit tests necessarily contain
+      credential-shaped literals.
+
+  - scanner: secrets
+    path: "test/e2e/*"
+    reason: >-
+      End-to-end tests push AWS's published example key id through the
+      gateway to prove it gets blocked. Not a credential.
+
+  - scanner: secrets
+    path: "*_test.go"
+    reason: >-
+      Unit tests assert on redaction and reporting, so they need
+      credential-shaped fixtures. Scoped to test files only: a finding
+      in non-test source is still reported.
+
+  - scanner: iac
+    path: "configs/*"
+    reason: >-
+      Example configuration shipped for documentation, never deployed.
