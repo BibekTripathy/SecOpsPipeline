@@ -75,10 +75,13 @@ docker compose exec gateway gateway token -user alice -issue laptop -config /etc
 
 | Tag | Published on |
 |---|---|
-| `latest` | every push to the default branch |
-| `main`, `dev` | pushes to that branch, if configured |
+| `1.2.3`, `1.2` | a `v1.2.3` git tag |
+| `latest` | the newest semver tag |
+| `main` | a push to the default branch |
 | `sha-<commit>` | every build |
-| `1.2.3`, `1.2` | a `v1.2.3` tag |
+
+Images are published on a **`v*` git tag** or a push to the default branch —
+not on every commit. Pushing to a feature branch runs CI but builds no image.
 
 Images appear under the repository's **Packages**, not Releases. The Releases
 page carries the standalone binaries, published on a `v*` tag.
