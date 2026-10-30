@@ -83,6 +83,24 @@ assignment rule, and the false positive count is the number that decides
 whether developers trust the tool or route around it. Full report:
 [`docs/detection-report.md`](docs/detection-report.md).
 
+## Measured cost
+
+Scan time is the latency the gateway adds to a push
+([`test/bench`](test/bench), reproduce with `make bench`):
+
+| Push shape | Scan time |
+|---|---:|
+| 1 file, 4 KB | 4.7 ms |
+| 50 files, 8 KB | 14.9 ms |
+| 200 files, 8 KB | 43.2 ms |
+| 500 files, 16 KB | 170 ms |
+
+A typical push costs single-digit milliseconds; a 500-file refactor costs
+under a fifth of a second. Writing these benchmarks found two problems
+worth 18–22× between them — a `git` process spawn per changed file, and
+ten regexes run against every line. Full detail:
+[`docs/benchmark.md`](docs/benchmark.md).
+
 ## Quick start
 
 ```sh
@@ -126,6 +144,7 @@ make test     # unit tests, e2e and the detection corpus
 make race     # the scanner pool and hook server are concurrent; run this
 make cover    # coverage summary
 make redteam  # regenerate the detection report
+make bench    # scan-time benchmarks
 ```
 
 ## Security notes

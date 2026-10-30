@@ -4,6 +4,8 @@ package scanner
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	"github.com/BibekTripathy/SecOpsPipeline/internal/finding"
 	"github.com/BibekTripathy/SecOpsPipeline/internal/gitutil"
@@ -27,6 +29,51 @@ type Target struct {
 
 	Commits []gitutil.Commit
 	Files   []gitutil.ChangedFile
+
+	// Blobs streams file contents from one long-lived git process shared
+	// by every plugin. When nil, ReadFile falls back to a process per
+	// read, which is correct but much slower; the gateway always sets it.
+	Blobs *gitutil.BlobReader
+}
+
+// ReadFile returns a changed file's new content, or nil when the file was
+// deleted or exceeds maxBytes.
+//
+// Scanners should use this rather than reaching for gitutil directly, so
+// they all share the one batch process the gateway opened for the push.
+func (t *Target) ReadFile(ctx context.Context, f gitutil.ChangedFile, maxBytes int64) ([]byte, error) {
+	if f.Blob == "" {
+		return nil, nil
+	}
+
+	if t.Blobs != nil {
+		content, err := t.Blobs.Read(f.Blob, maxBytes)
+		var tooLarge *gitutil.ErrBlobTooLarge
+		if errors.As(err, &tooLarge) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", f.Path, err)
+		}
+		return content, nil
+	}
+
+	// Fallback: two process spawns, used only by tests that build a
+	// Target by hand.
+	if maxBytes > 0 {
+		size, err := gitutil.BlobSize(ctx, t.Git, f.Blob)
+		if err != nil {
+			return nil, fmt.Errorf("size of %s: %w", f.Path, err)
+		}
+		if size > maxBytes {
+			return nil, nil
+		}
+	}
+	content, err := gitutil.ReadBlob(ctx, t.Git, f.Blob)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", f.Path, err)
+	}
+	return content, nil
 }
 
 // Scanner is one detection plugin. Implementations must be safe for concurrent

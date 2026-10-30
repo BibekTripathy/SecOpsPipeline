@@ -128,3 +128,56 @@ func hasRule(fs []finding.Finding, id string) bool {
 	}
 	return false
 }
+
+// TestPrefiltersDoNotHideMatches is the safety net for the prefilter: for
+// every rule, a line the pattern matches must also pass the prefilter.
+//
+// A wrong prefilter literal makes a rule silently stop firing, which is
+// the worst failure mode a secret scanner has, so this checks the two
+// against each other directly rather than trusting them to agree.
+func TestPrefiltersDoNotHideMatches(t *testing.T) {
+	samples := []string{
+		`key := "AKIAIOSFODNN7EXAMPLE"`,
+		`ASIAIOSFODNN7EXAMPLE`,
+		`aws_secret_access_key = "abcdefghij0123456789ABCDEFGHIJ0123456789"`,
+		`AWS.SECRET.ACCESS.KEY = "abcdefghij0123456789ABCDEFGHIJ0123456789"`,
+		`token = "ghp_1234567890abcdefghijklmnopqrstuvwxyz"`,
+		`gho_1234567890abcdefghijklmnopqrstuvwxyz`,
+		`sqg_` + strings.Repeat("a", 43),
+		`xoxb-123456789012-abcdefghijklmnopqrstuvwx`,
+		`sk_live_4eC39HqLyjWDarjtT1zdp7dcABCDEFGH`,
+		`rk_test_4eC39HqLyjWDarjtT1zdp7dcABCDEFGH`,
+		`AIzaSyB1234567890abcdefghijklmnopqrstuv`,
+		`-----BEGIN RSA PRIVATE KEY-----`,
+		`-----BEGIN PRIVATE KEY-----`,
+		`eyJhbGciOiJIUzI1NiIs.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1g`,
+		`password: "correct-horse-battery"`,
+		`SECRET_KEY = "abcdefghijklmnopqrst"`,
+		`"api_key": "abcdefghijklmnopqrst"`,
+		`db.pwd="abcdefghijklmnop"`,
+		`publishCredential="abcdefghijklmnopqrst"`,
+	}
+
+	for _, rule := range DefaultRules {
+		for _, line := range samples {
+			if rule.Pattern.FindStringSubmatch(line) == nil {
+				continue
+			}
+			lower := appendLower(nil, line)
+			if !rule.mayMatch(lower) {
+				t.Errorf("rule %s matches %q but its prefilter rejects it; "+
+					"the rule would silently never fire", rule.ID, line)
+			}
+		}
+	}
+}
+
+// TestEveryRuleHasAPrefilter: a rule without one pays the full regex cost
+// on every line of every file, so adding one should be a deliberate choice.
+func TestEveryRuleHasAPrefilter(t *testing.T) {
+	for _, rule := range DefaultRules {
+		if len(rule.Literals) == 0 {
+			t.Errorf("rule %s has no prefilter literals", rule.ID)
+		}
+	}
+}

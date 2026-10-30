@@ -21,6 +21,9 @@ Derived from `Cloud & Security Project Ideas.pdf`, which sets the MVP at
 - [x] End-to-end tests: real `git push` against a running gateway
 - [x] Red-team corpus: 56 planted secrets, 27 look-alikes, published
       detection rate and false positive count (`make redteam`)
+- [x] Scan-time benchmark vs push size (`make bench`), plus the two
+      optimisations it paid for: a batched `git cat-file` reader and a
+      literal prefilter ahead of the regex layer (18-22x)
 
 ## MVP remaining
 
@@ -39,8 +42,6 @@ What is left of that:
 
 From the doc, roughly in the order they pay off:
 
-- [ ] **Benchmark**: scan time vs push size, with a chart. The honest question
-      about any push-path gateway is what it costs, so answer it.
 - [ ] **Credential verification**: per-provider read-only checks behind the
       existing `secrets.Verifier` interface (AWS STS, GitHub `/user`, Slack
       `auth.test`, Stripe `/v1/account`). Needs a shared rate limiter and an
@@ -70,9 +71,20 @@ The doc is explicit about what reviewers look at, and all three are still
 open:
 
 1. a README with an architecture diagram — **done**
-2. one measured result — **partly done**: 100% detection over 56 planted
-   secrets with 0 false positives; the scan-time benchmark is still open
+2. one measured result — **done**: 100% detection over 56 planted secrets
+   with 0 false positives, and 43 ms to scan a 200-file push
 3. a short demo GIF — **unblocked**; the e2e suite shows the exact flow to record
+
+## Performance work that remains
+
+The floor is now `describe`, a flat ~3.5 ms of two `git` process spawns
+per push. Folding `rev-list` and `diff-tree` into the existing
+`cat-file --batch` process, or into a single `git log --raw` invocation,
+would cut it. It only matters for very small pushes, so it is not urgent.
+
+Per-file parallelism inside a single scanner is the other option, but the
+pool parallelises across plugins and there are only two; this becomes
+worth doing when SAST and IaC land.
 
 ## Corpus work that remains
 

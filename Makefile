@@ -28,8 +28,9 @@ vet:
 fmt:
 	gofmt -l -w .
 
+# -run='^$$' keeps the test functions from running alongside the benchmarks.
 bench:
-	go test -bench=. -benchmem ./...
+	go test ./test/bench -bench=. -benchmem -run='^$$' -count=1
 
 run: build
 	./bin/$(BINARY) serve -config configs/gateway.example.yaml

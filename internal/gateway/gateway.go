@@ -202,6 +202,20 @@ func (g *Gateway) Decide(ctx context.Context, req hook.Request) hook.Response {
 		AlternateObjectDirs: req.AlternateObjectDirs,
 	}
 
+	// One git process serves every plugin's blob reads for this push.
+	// Opening it per file instead costs two process spawns per changed
+	// file, which dominates the scan on any push of size.
+	blobs, err := gitutil.NewBlobReader(ctx, git)
+	if err != nil {
+		g.Log.Error("open blob reader", "push", req.PushID, "error", err)
+		return hook.Response{Err: "could not read the pushed objects"}
+	}
+	defer func() {
+		if err := blobs.Close(); err != nil {
+			g.Log.Warn("close blob reader", "push", req.PushID, "error", err)
+		}
+	}()
+
 	for _, u := range req.Updates {
 		target, err := g.describe(ctx, state.push, git, u)
 		if err != nil {
@@ -209,6 +223,7 @@ func (g *Gateway) Decide(ctx context.Context, req hook.Request) hook.Response {
 			return hook.Response{Err: "could not read the pushed commits"}
 		}
 
+		target.Blobs = blobs
 		results := g.Scanners.Run(ctx, target, g.Config.Scan.Workers)
 		for _, r := range scanner.Errors(results) {
 			scanErrs++

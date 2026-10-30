@@ -4,12 +4,10 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"fmt"
 	"path"
 	"strings"
 
 	"github.com/BibekTripathy/SecOpsPipeline/internal/finding"
-	"github.com/BibekTripathy/SecOpsPipeline/internal/gitutil"
 	"github.com/BibekTripathy/SecOpsPipeline/internal/scanner"
 )
 
@@ -52,20 +50,12 @@ func (s *Scanner) Scan(ctx context.Context, t *scanner.Target) ([]finding.Findin
 			return out, err
 		}
 
-		size, err := gitutil.BlobSize(ctx, t.Git, f.Blob)
+		content, err := t.ReadFile(ctx, f, s.MaxFileBytes)
 		if err != nil {
-			return out, fmt.Errorf("size of %s: %w", f.Path, err)
+			return out, err
 		}
-		if s.MaxFileBytes > 0 && size > s.MaxFileBytes {
-			continue
-		}
-
-		content, err := gitutil.ReadBlob(ctx, t.Git, f.Blob)
-		if err != nil {
-			return out, fmt.Errorf("read %s: %w", f.Path, err)
-		}
-		if isBinary(content) {
-			continue
+		if content == nil {
+			continue // deleted, or over the size limit
 		}
 		out = append(out, s.ScanContent(ctx, f.Path, content)...)
 	}
@@ -86,9 +76,19 @@ func (s *Scanner) ScanContent(ctx context.Context, filePath string, content []by
 	sc := bufio.NewScanner(bytes.NewReader(content))
 	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
 
+	// lower is reused across lines so the prefilter allocates nothing.
+	// Most lines of most files match no rule, and the prefilter is what
+	// keeps the common case from paying for ten regex passes.
+	var lower []byte
+
 	for lineNo := 1; sc.Scan(); lineNo++ {
 		line := sc.Text()
+		lower = appendLower(lower[:0], line)
+
 		for _, rule := range s.Rules {
+			if !rule.mayMatch(lower) {
+				continue
+			}
 			m := rule.Pattern.FindStringSubmatch(line)
 			if m == nil || len(m) < 2 {
 				continue
@@ -129,6 +129,22 @@ func (s *Scanner) ScanContent(ctx context.Context, filePath string, content []by
 		}
 	}
 	return out
+}
+
+// appendLower appends the ASCII-lowercased form of s to dst.
+//
+// Only ASCII is folded, which is all the prefilter literals contain;
+// strings.ToLower would allocate on every line and also fold runes the
+// prefilter never asks about.
+func appendLower(dst []byte, s string) []byte {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		dst = append(dst, c)
+	}
+	return dst
 }
 
 // SkipPath reports whether a path is excluded from scanning. Generated
